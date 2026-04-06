@@ -15,7 +15,7 @@ import (
 var Version = "dev"
 
 func main() {
-	verbose, version, showHelp, printEnv, noOtel, otelTable, otelTableSet, upstream, logFile, profile, otel, codexArgs := parseArgs(os.Args[1:])
+	verbose, version, showHelp, printEnv, noOtel, otelMetricsTable, otelMetricsTableSet, otelLogsTable, otelLogsTableSet, upstream, logFile, profile, otel, codexArgs := parseArgs(os.Args[1:])
 
 	if showHelp {
 		handleHelp(upstream)
@@ -93,11 +93,12 @@ func main() {
 	log.Printf("databricks-codex: gateway URL: %s", gatewayURL)
 
 	// --- OTEL tables ---
-	otelMetricsTable := "main.codex_telemetry.codex_otel_metrics"
-	if otelTableSet {
-		otelMetricsTable = otelTable
+	if !otelMetricsTableSet {
+		otelMetricsTable = "main.codex_telemetry.codex_otel_metrics"
 	}
-	otelLogsTable := deriveLogsTable(otelMetricsTable)
+	if !otelLogsTableSet {
+		otelLogsTable = deriveLogsTable(otelMetricsTable)
+	}
 	if noOtel {
 		otel = false
 	}
@@ -167,7 +168,7 @@ func main() {
 		os.Setenv("OTEL_EXPORTER_OTLP_LOGS_PROTOCOL", "http/protobuf")
 		os.Setenv("OTEL_LOGS_EXPORTER", "otlp")
 		os.Setenv("OTEL_LOGS_EXPORT_INTERVAL", "5000")
-		log.Printf("databricks-codex: OTEL env vars set (metrics table: %s, logs table: %s)", otelMetricsTable, otelLogsTable)
+		log.Printf("databricks-codex: OTEL enabled — metrics=%s logs=%s", otelMetricsTable, otelLogsTable)
 	}
 
 	log.Printf("databricks-codex: launching codex")
@@ -187,20 +188,22 @@ func main() {
 }
 
 // parseArgs separates databricks-codex flags from codex flags.
-func parseArgs(args []string) (verbose bool, version bool, showHelp bool, printEnv bool, noOtel bool, otelTable string, otelTableSet bool, upstream string, logFile string, profile string, otel bool, codexArgs []string) {
-	otelTable = "main.codex_telemetry.codex_otel_metrics" // default
+func parseArgs(args []string) (verbose bool, version bool, showHelp bool, printEnv bool, noOtel bool, otelMetricsTable string, otelMetricsTableSet bool, otelLogsTable string, otelLogsTableSet bool, upstream string, logFile string, profile string, otel bool, codexArgs []string) {
+	otelMetricsTable = "main.codex_telemetry.codex_otel_metrics" // default
 
 	knownFlags := map[string]bool{
-		"--verbose":    true,
-		"--version":    true,
-		"--help":       true,
-		"--print-env":  true,
-		"--no-otel":    true,
-		"--otel":       true,
-		"--otel-table": true,
-		"--upstream":   true,
-		"--log-file":   true,
-		"--profile":    true,
+		"--verbose":            true,
+		"--version":            true,
+		"--help":               true,
+		"--print-env":          true,
+		"--no-otel":            true,
+		"--otel":               true,
+		"--otel-table":         true,
+		"--otel-metrics-table": true,
+		"--otel-logs-table":    true,
+		"--upstream":           true,
+		"--log-file":           true,
+		"--profile":            true,
 	}
 
 	i := 0
@@ -234,14 +237,23 @@ func parseArgs(args []string) (verbose bool, version bool, showHelp bool, printE
 
 			if knownFlags[name] {
 				switch name {
-				case "--otel-table":
+				case "--otel-table", "--otel-metrics-table":
 					if value != "" {
-						otelTable = value
-						otelTableSet = true
+						otelMetricsTable = value
+						otelMetricsTableSet = true
 					} else if i+1 < len(args) {
 						i++
-						otelTable = args[i]
-						otelTableSet = true
+						otelMetricsTable = args[i]
+						otelMetricsTableSet = true
+					}
+				case "--otel-logs-table":
+					if value != "" {
+						otelLogsTable = value
+						otelLogsTableSet = true
+					} else if i+1 < len(args) {
+						i++
+						otelLogsTable = args[i]
+						otelLogsTableSet = true
 					}
 				case "--upstream":
 					if value != "" {
@@ -305,9 +317,11 @@ Databricks-Codex Flags:
   --print-env           Print resolved configuration and exit (token redacted)
   --verbose, -v         Enable debug logging to stderr
   --log-file string     Write debug logs to a file (combinable with --verbose)
-  --otel                Enable OpenTelemetry telemetry proxying
-  --no-otel             Disable OpenTelemetry for this session
-  --otel-table string   Unity Catalog table for OTEL metrics (default: main.codex_telemetry.codex_otel_metrics)
+  --otel                        Enable OpenTelemetry telemetry proxying
+  --no-otel                     Disable OpenTelemetry for this session
+  --otel-metrics-table string   Unity Catalog table for OTEL metrics (default: main.codex_telemetry.codex_otel_metrics)
+  --otel-logs-table string      Unity Catalog table for OTEL logs (default: derived from metrics table)
+  --otel-table string           Alias for --otel-metrics-table
   --version             Print version and exit
   --help, -h            Show this help message
 

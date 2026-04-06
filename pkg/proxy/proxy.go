@@ -34,7 +34,7 @@ func RecoveryHandler(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer func() {
 			if err := recover(); err != nil {
-				log.Printf("databricks-claude: proxy panic recovered: %v", err)
+				log.Printf("databricks-codex: proxy panic recovered: %v", err)
 				http.Error(w, "Internal proxy error", http.StatusBadGateway)
 			}
 		}()
@@ -216,12 +216,12 @@ func NewServer(config *Config) http.Handler {
 
 	inferenceUpstream, err := url.Parse(config.InferenceUpstream)
 	if err != nil {
-		log.Fatalf("databricks-claude: invalid InferenceUpstream %q: %v", config.InferenceUpstream, err)
+		log.Fatalf("databricks-codex: invalid InferenceUpstream %q: %v", config.InferenceUpstream, err)
 	}
 
 	otelUpstream, err := url.Parse(config.OTELUpstream)
 	if err != nil {
-		log.Fatalf("databricks-claude: invalid OTELUpstream %q: %v", config.OTELUpstream, err)
+		log.Fatalf("databricks-codex: invalid OTELUpstream %q: %v", config.OTELUpstream, err)
 	}
 
 	// Inference proxy — default route
@@ -231,7 +231,7 @@ func NewServer(config *Config) http.Handler {
 			if err != nil {
 				// Log the error but let the upstream return an auth failure rather
 				// than crashing; the empty bearer will be rejected by the upstream.
-				log.Printf("databricks-claude: token fetch error: %v", err)
+				log.Printf("databricks-codex: token fetch error: %v", err)
 			}
 			req.Header.Set("Authorization", "Bearer "+token)
 			req.Header.Set("x-api-key", token) // Anthropic SDK sends x-api-key; overwrite the "proxy-managed" placeholder
@@ -246,7 +246,7 @@ func NewServer(config *Config) http.Handler {
 			req.URL.RawPath = ""
 
 			if config.Verbose {
-				log.Printf("databricks-claude: inference → %s %s%s", req.Method, req.URL.Host, req.URL.Path)
+				log.Printf("databricks-codex: inference → %s %s%s", req.Method, req.URL.Host, req.URL.Path)
 			}
 		},
 		ModifyResponse: func(resp *http.Response) error {
@@ -258,7 +258,7 @@ func NewServer(config *Config) http.Handler {
 					if len(snippet) > 500 {
 						snippet = snippet[:500] + "..."
 					}
-					log.Printf("databricks-claude: upstream error %d: %s", resp.StatusCode, snippet)
+					log.Printf("databricks-codex: upstream error %d: %s", resp.StatusCode, snippet)
 					// Put the body back so the caller still gets it
 					resp.Body = io.NopCloser(bytes.NewReader(body))
 				}
@@ -273,7 +273,7 @@ func NewServer(config *Config) http.Handler {
 		Director: func(req *http.Request) {
 			token, err := config.TokenSource.Token(req.Context())
 			if err != nil {
-				log.Printf("databricks-claude: token fetch error (otel): %v", err)
+				log.Printf("databricks-codex: token fetch error (otel): %v", err)
 			}
 			req.Header.Set("Authorization", "Bearer "+token)
 			req.Header.Set("x-api-key", token)
@@ -295,7 +295,7 @@ func NewServer(config *Config) http.Handler {
 			req.URL.RawPath = ""
 
 			if config.Verbose {
-				log.Printf("databricks-claude: otel → %s %s%s", req.Method, req.URL.Host, req.URL.Path)
+				log.Printf("databricks-codex: otel → %s %s%s", req.Method, req.URL.Host, req.URL.Path)
 			}
 		},
 		ModifyResponse: func(resp *http.Response) error {
@@ -307,9 +307,9 @@ func NewServer(config *Config) http.Handler {
 						snippet = snippet[:500] + "..."
 					}
 					if resp.StatusCode >= 400 {
-						log.Printf("databricks-claude: otel upstream error %d: %s", resp.StatusCode, snippet)
+						log.Printf("databricks-codex: otel upstream error %d: %s", resp.StatusCode, snippet)
 					} else {
-						log.Printf("databricks-claude: otel ← %d (%d bytes)", resp.StatusCode, len(body))
+						log.Printf("databricks-codex: otel ← %d (%d bytes)", resp.StatusCode, len(body))
 					}
 					resp.Body = io.NopCloser(bytes.NewReader(body))
 				}
@@ -345,7 +345,7 @@ func Start(handler http.Handler) (net.Listener, error) {
 		if err := http.Serve(l, handler); err != nil {
 			// http.Serve returns when the listener is closed; that is expected
 			// during shutdown and not worth logging as an error.
-			log.Printf("databricks-claude: proxy stopped: %v", err)
+			log.Printf("databricks-codex: proxy stopped: %v", err)
 		}
 	}()
 	return l, nil

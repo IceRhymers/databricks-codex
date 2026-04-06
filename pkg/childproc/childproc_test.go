@@ -49,7 +49,8 @@ func TestRun_ExitCode(t *testing.T) {
 
 func TestRun_Success(t *testing.T) {
 	code, err := Run(context.Background(), Config{
-		BinaryName: "/bin/true",
+		BinaryName: "/bin/sh",
+		Args:       []string{"-c", "exit 0"},
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
