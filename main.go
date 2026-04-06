@@ -117,7 +117,7 @@ func main() {
 	// --- Determine OTEL upstream ---
 	otelUpstream := ""
 	if otel {
-		otelUpstream = host
+		otelUpstream = host + "/api/2.0/otel"
 		log.Printf("databricks-codex: OTEL enabled, upstream: %s", otelUpstream)
 	}
 
