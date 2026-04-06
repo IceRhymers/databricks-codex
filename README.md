@@ -1,10 +1,10 @@
 # databricks-codex
 
-Transparent wrapper for the OpenAI Codex CLI that auto-injects Databricks OAuth tokens — so you never manually paste a token again.
+Transparent wrapper for the OpenAI Codex CLI that runs a local proxy backed by Databricks OAuth — so you never manually paste or refresh a token again.
 
 ## The Problem
 
-Databricks AI Gateway uses short-lived OAuth tokens. The Codex CLI reads `OPENAI_BASE_URL` and `OPENAI_API_KEY` from the environment. Without this tool, you'd need to manually refresh and export a new token every hour.
+Databricks AI Gateway uses short-lived OAuth tokens. Without this tool, you'd need to manually refresh a token, point Codex at the right Databricks endpoint, and keep that token fresh for the duration of a session.
 
 ## How It Works
 
@@ -13,9 +13,10 @@ Databricks AI Gateway uses short-lived OAuth tokens. The Codex CLI reads `OPENAI
 1. Fetches a fresh Databricks OAuth token via `databricks auth token`
 2. Discovers your workspace host from `databricks auth env`
 3. Resolves your workspace ID via the SCIM API
-4. Constructs the AI Gateway URL: `https://<host>/serving-endpoints/<workspaceId>.aws.proxy.codex/openai/v1`
-5. Injects `OPENAI_BASE_URL` and `OPENAI_API_KEY` into the environment
-6. Exec's `codex` with your args — fully transparent
+4. Constructs the Databricks AI Gateway URL
+5. Starts a local proxy that forwards Codex traffic upstream and refreshes the Databricks token automatically
+6. Temporarily patches `~/.codex/config.toml` so Codex talks to that local proxy
+7. Exec's `codex` with your args — fully transparent
 
 You use it exactly like `codex`. Every flag and argument is forwarded.
 
@@ -54,8 +55,8 @@ databricks-codex --log-file /tmp/dc.log "fix the bug in main.go"
 # Both stderr and file:
 databricks-codex -v --log-file /tmp/dc.log "fix the bug in main.go"
 
-# Override gateway URL:
-databricks-codex --upstream https://my-host/serving-endpoints/codex/openai/v1 "summarize this PR"
+# Override upstream URL for the local proxy:
+databricks-codex --upstream https://1234567890123456.ai-gateway.cloud.databricks.com/openai/v1 "summarize this PR"
 ```
 
 ## Flags
@@ -65,9 +66,14 @@ databricks-codex --upstream https://my-host/serving-endpoints/codex/openai/v1 "s
 | `--verbose`, `-v` | `false` | Enable debug logging to stderr |
 | `--log-file` | | Write debug logs to a file (combinable with `--verbose`) |
 | `--print-env` | | Print resolved configuration (token redacted) and exit |
+| `--otel` | `true` | Enable OpenTelemetry logs export |
 | `--no-otel` | | Disable OpenTelemetry for this session |
-| `--otel-table` | `main.codex_telemetry.codex_otel_metrics` | UC table for OTEL metrics |
-| `--upstream` | auto-discovered | Override the AI Gateway URL |
+| `--otel-logs-table` | `main.codex_telemetry.codex_otel_logs` | Unity Catalog table for OpenTelemetry logs |
+| `--profile` | saved/`DEFAULT` | Databricks CLI profile to use and persist for future sessions |
+| `--upstream` | auto-discovered | Override the upstream inference URL the local proxy forwards to |
+| `--proxy-api-key` | disabled | Require this API key on all local proxy requests |
+| `--tls-cert` | | TLS certificate file for the local proxy (requires `--tls-key`) |
+| `--tls-key` | | TLS private key file for the local proxy (requires `--tls-cert`) |
 | `--version` | | Print version and exit |
 | `--help`, `-h` | | Print wrapper flags and the full `codex --help` output, then exit |
 
@@ -79,15 +85,15 @@ On startup, `databricks-codex` auto-discovers:
 
 - Your workspace host from `databricks auth env`
 - Your workspace ID via the SCIM API (`x-databricks-org-id` header)
-- Constructs the AI Gateway URL: `<host>/serving-endpoints/<workspaceId>.aws.proxy.codex/openai/v1`
+- Constructs the AI Gateway URL: `https://<workspaceId>.ai-gateway.cloud.databricks.com/openai/v1`
 
 If workspace ID resolution fails, it falls back to `<host>/serving-endpoints/codex/openai/v1`.
 
 ## Debugging
 
-### Verify your auth setup
+### Verify your resolved configuration
 
-Run `--print-env` to see the resolved configuration without launching codex. The token is redacted so it's safe to share output for debugging.
+Run `--print-env` to print the resolved profile, Databricks host, upstream base URL, redacted token placeholder, OpenTelemetry logs table, and detected Codex binary path, then exit without launching Codex.
 
 ```bash
 databricks-codex --print-env
@@ -97,13 +103,31 @@ Example output:
 
 ```
 databricks-codex configuration:
+  Profile:           DEFAULT
   DATABRICKS_HOST:   https://adb-1234567890123456.7.azuredatabricks.net
-  OPENAI_BASE_URL:   https://adb-1234567890123456.7.azuredatabricks.net/serving-endpoints/1234567890123456.aws.proxy.codex/openai/v1
-  OPENAI_API_KEY:    dapi-*** (redacted)
+  OPENAI_BASE_URL:   https://1234567890123456.ai-gateway.cloud.databricks.com/openai/v1
+  OPENAI_API_KEY:    dapi-***
+  OpenTelemetry Logs Table:   main.codex_telemetry.codex_otel_logs
   Codex binary:      /usr/local/bin/codex
 ```
 
-If the token shows as empty or the URL looks wrong, check your Databricks CLI with `databricks auth env`.
+Notes:
+
+- `OPENAI_BASE_URL` is the resolved upstream Databricks endpoint, not the localhost proxy address
+- `OPENAI_API_KEY` is always redacted in this output
+- `Codex binary` shows `(not found)` if `codex` is not on your `PATH`
+
+If the profile, host, or URL looks wrong, check your Databricks CLI setup with `databricks auth env` and `databricks auth token`.
+
+## Proxy behavior
+
+`databricks-codex` does not rely solely on exporting `OPENAI_BASE_URL` and `OPENAI_API_KEY` into the shell environment. Instead, it starts a localhost proxy for the current session and temporarily patches `~/.codex/config.toml` to point Codex at that proxy.
+
+This lets the wrapper:
+
+- Refresh Databricks OAuth tokens automatically during long Codex sessions
+- Keep Codex pointed at a stable local endpoint while upstream credentials rotate
+- Restore your original `~/.codex/config.toml` on exit, with multi-session handoff support
 
 ### View full usage
 

@@ -355,7 +355,7 @@ func captureStdout(fn func()) string {
 
 func TestHandlePrintEnv_DapiTokenRedacted(t *testing.T) {
 	out := captureStdout(func() {
-		handlePrintEnv("https://dbc.example.com", "https://gw.example.com/openai/v1", "dapi-abc123secret", "DEFAULT")
+		handlePrintEnv("https://dbc.example.com", "https://gw.example.com/openai/v1", "dapi-abc123secret", "DEFAULT", "main.codex_telemetry.codex_otel_logs")
 	})
 	if !strings.Contains(out, "dapi-***") {
 		t.Errorf("expected dapi token to appear as 'dapi-***', got:\n%s", out)
@@ -367,7 +367,7 @@ func TestHandlePrintEnv_DapiTokenRedacted(t *testing.T) {
 
 func TestHandlePrintEnv_NonDapiTokenRedacted(t *testing.T) {
 	out := captureStdout(func() {
-		handlePrintEnv("https://dbc.example.com", "https://gw.example.com/openai/v1", "eyJhbGciOiJSUzI1NiJ9", "DEFAULT")
+		handlePrintEnv("https://dbc.example.com", "https://gw.example.com/openai/v1", "eyJhbGciOiJSUzI1NiJ9", "DEFAULT", "main.codex_telemetry.codex_otel_logs")
 	})
 	if !strings.Contains(out, "**** (redacted)") {
 		t.Errorf("expected non-dapi token to appear as '**** (redacted)', got:\n%s", out)
@@ -376,7 +376,7 @@ func TestHandlePrintEnv_NonDapiTokenRedacted(t *testing.T) {
 
 func TestHandlePrintEnv_ContainsProfile(t *testing.T) {
 	out := captureStdout(func() {
-		handlePrintEnv("https://dbc.example.com", "https://gw.example.com/openai/v1", "tok", "aidev")
+		handlePrintEnv("https://dbc.example.com", "https://gw.example.com/openai/v1", "tok", "aidev", "main.codex_telemetry.codex_otel_logs")
 	})
 	if !strings.Contains(out, "aidev") {
 		t.Errorf("expected output to contain profile 'aidev', got:\n%s", out)
@@ -386,7 +386,7 @@ func TestHandlePrintEnv_ContainsProfile(t *testing.T) {
 func TestHandlePrintEnv_ContainsDatabricksHost(t *testing.T) {
 	host := "https://dbc-abc123.cloud.databricks.com"
 	out := captureStdout(func() {
-		handlePrintEnv(host, "https://gw.example.com/openai/v1", "tok", "DEFAULT")
+		handlePrintEnv(host, "https://gw.example.com/openai/v1", "tok", "DEFAULT", "main.codex_telemetry.codex_otel_logs")
 	})
 	if !strings.Contains(out, host) {
 		t.Errorf("expected output to contain DATABRICKS_HOST %q, got:\n%s", host, out)
@@ -396,7 +396,7 @@ func TestHandlePrintEnv_ContainsDatabricksHost(t *testing.T) {
 func TestHandlePrintEnv_ContainsOpenAIBaseURL(t *testing.T) {
 	baseURL := "https://gw.example.com/openai/v1"
 	out := captureStdout(func() {
-		handlePrintEnv("https://dbc.example.com", baseURL, "tok", "DEFAULT")
+		handlePrintEnv("https://dbc.example.com", baseURL, "tok", "DEFAULT", "main.codex_telemetry.codex_otel_logs")
 	})
 	if !strings.Contains(out, baseURL) {
 		t.Errorf("expected output to contain OPENAI_BASE_URL %q, got:\n%s", baseURL, out)
@@ -471,6 +471,75 @@ func TestHandleHelp_ContainsVersion(t *testing.T) {
 	})
 	if !strings.Contains(out, fmt.Sprintf("databricks-codex v%s", Version)) {
 		t.Errorf("expected help output to contain version string, got:\n%s", out)
+	}
+}
+
+// --- resolveOtelLogsTable tests ---
+
+func TestResolveOtelLogsTable(t *testing.T) {
+	tests := []struct {
+		name       string
+		flagValue  string
+		flagSet    bool
+		savedValue string
+		want       string
+	}{
+		{
+			name:    "flag set with value wins",
+			flagValue: "custom.db.table",
+			flagSet:   true,
+			want:      "custom.db.table",
+		},
+		{
+			name:       "flag set wins over saved",
+			flagValue:  "flag.table",
+			flagSet:    true,
+			savedValue: "saved.table",
+			want:       "flag.table",
+		},
+		{
+			name:       "saved value used when flag not set",
+			flagSet:    false,
+			savedValue: "saved.table",
+			want:       "saved.table",
+		},
+		{
+			name:    "default when no flag and no saved",
+			flagSet: false,
+			want:    "main.codex_telemetry.codex_otel_logs",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := resolveOtelLogsTable(tc.flagValue, tc.flagSet, tc.savedValue)
+			if got != tc.want {
+				t.Errorf("resolveOtelLogsTable(%q, %v, %q) = %q, want %q",
+					tc.flagValue, tc.flagSet, tc.savedValue, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestResolveOtelLogsTable_NoOtelDoesNotClear(t *testing.T) {
+	// --no-otel only sets otel=false in main(); it never touches the
+	// resolution function or state file. Verify saved value survives.
+	got := resolveOtelLogsTable("", false, "custom.table")
+	if got != "custom.table" {
+		t.Errorf("expected saved value to survive, got %q", got)
+	}
+}
+
+func TestHandlePrintEnv_ContainsOtelLogsTable(t *testing.T) {
+	table := "main.custom.otel_logs"
+	out := captureStdout(func() {
+		handlePrintEnv("https://dbc.example.com", "https://gw.example.com/openai/v1", "tok", "DEFAULT", table)
+	})
+	if !strings.Contains(out, table) {
+		t.Errorf("expected output to contain OTEL Logs Table %q, got:\n%s", table, out)
+	}
+	if !strings.Contains(out, "OTEL Logs Table:") {
+		t.Errorf("expected output to contain 'OTEL Logs Table:' label, got:\n%s", out)
 	}
 }
 

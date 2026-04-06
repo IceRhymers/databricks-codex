@@ -10,7 +10,8 @@ import (
 // persistentState is the JSON schema for ~/.codex/.databricks-codex.json.
 // This file survives config.toml restore and persists across sessions.
 type persistentState struct {
-	Profile string `json:"profile,omitempty"`
+	Profile       string `json:"profile,omitempty"`
+	OtelLogsTable string `json:"otel_logs_table,omitempty"`
 }
 
 // statePath returns the path to the persistent state file.
