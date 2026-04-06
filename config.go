@@ -5,8 +5,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/IceRhymers/databricks-codex/pkg/filelock"
-	"github.com/IceRhymers/databricks-codex/pkg/registry"
+	"github.com/IceRhymers/databricks-claude/pkg/filelock"
+	"github.com/IceRhymers/databricks-claude/pkg/registry"
 	"github.com/IceRhymers/databricks-codex/pkg/tomlconfig"
 )
 

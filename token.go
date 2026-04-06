@@ -10,7 +10,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/IceRhymers/databricks-codex/pkg/tokencache"
+	"github.com/IceRhymers/databricks-claude/pkg/tokencache"
 )
 
 // TokenProvider is an alias to the pkg type for backward compatibility.
