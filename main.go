@@ -18,7 +18,7 @@ import (
 var Version = "dev"
 
 func main() {
-	verbose, version, showHelp, printEnv, noOtel, otelLogsTable, otelLogsTableSet, upstream, logFile, profile, otel, proxyAPIKey, tlsCert, tlsKey, codexArgs := parseArgs(os.Args[1:])
+	verbose, version, showHelp, printEnv, noOtel, otelLogsTable, otelLogsTableSet, upstream, logFile, profile, otel, proxyAPIKey, tlsCert, tlsKey, model, modelSet, codexArgs := parseArgs(os.Args[1:])
 
 	if showHelp {
 		handleHelp(upstream)
@@ -77,6 +77,29 @@ func main() {
 	}
 	log.Printf("databricks-codex: using profile: %s", profile)
 
+	// --- Resolve model ---
+	// Resolution chain: --model flag → saved state → "databricks-gpt-5-4".
+	modelExplicit := modelSet
+	if model == "" {
+		if saved := loadState(); saved.Model != "" {
+			model = saved.Model
+			log.Printf("databricks-codex: using saved model: %s", model)
+		}
+	}
+	if model == "" {
+		model = "databricks-gpt-5-4"
+	}
+	if modelExplicit {
+		saved := loadState()
+		saved.Model = model
+		if err := saveState(saved); err != nil {
+			log.Printf("databricks-codex: failed to save model: %v", err)
+		} else {
+			log.Printf("databricks-codex: saved model %q for future sessions", model)
+		}
+	}
+	log.Printf("databricks-codex: using model: %s", model)
+
 	// --- Ensure the user is authenticated before proceeding ---
 	if err := authcheck.EnsureAuthenticated(profile); err != nil {
 		log.Fatalf("databricks-codex: auth failed: %v", err)
@@ -134,7 +157,7 @@ func main() {
 
 	// --- Print env and exit if requested ---
 	if printEnv {
-		handlePrintEnv(host, gatewayURL, initialToken, profile, otelLogsTable)
+		handlePrintEnv(host, gatewayURL, initialToken, profile, model, otelLogsTable)
 		os.Exit(0)
 	}
 
@@ -187,7 +210,7 @@ func main() {
 	}
 
 	cm := NewConfigManager()
-	if err := cm.Setup(proxyAddr, "databricks-gpt-5-4", otelConfigEndpoint); err != nil {
+	if err := cm.Setup(proxyAddr, model, modelExplicit, otelConfigEndpoint); err != nil {
 		log.Fatalf("databricks-codex: failed to patch config.toml: %v", err)
 	}
 
@@ -216,7 +239,7 @@ func main() {
 }
 
 // parseArgs separates databricks-codex flags from codex flags.
-func parseArgs(args []string) (verbose bool, version bool, showHelp bool, printEnv bool, noOtel bool, otelLogsTable string, otelLogsTableSet bool, upstream string, logFile string, profile string, otel bool, proxyAPIKey string, tlsCert string, tlsKey string, codexArgs []string) {
+func parseArgs(args []string) (verbose bool, version bool, showHelp bool, printEnv bool, noOtel bool, otelLogsTable string, otelLogsTableSet bool, upstream string, logFile string, profile string, otel bool, proxyAPIKey string, tlsCert string, tlsKey string, model string, modelSet bool, codexArgs []string) {
 	knownFlags := map[string]bool{
 		"--verbose":         true,
 		"--version":         true,
@@ -231,6 +254,7 @@ func parseArgs(args []string) (verbose bool, version bool, showHelp bool, printE
 		"--proxy-api-key":   true,
 		"--tls-cert":        true,
 		"--tls-key":         true,
+		"--model":           true,
 	}
 
 	i := 0
@@ -315,6 +339,15 @@ func parseArgs(args []string) (verbose bool, version bool, showHelp bool, printE
 						i++
 						tlsKey = args[i]
 					}
+				case "--model":
+					if value != "" {
+						model = value
+						modelSet = true
+					} else if i+1 < len(args) {
+						i++
+						model = args[i]
+						modelSet = true
+					}
 				case "--verbose":
 					verbose = true
 				case "--version":
@@ -352,6 +385,7 @@ Usage:
 
 Databricks-Codex Flags:
   --profile string      Databricks CLI profile (saved for future sessions; default: env or "DEFAULT")
+  --model string        Model name (saved for future sessions; default: "databricks-gpt-5-4")
   --upstream string     Override the AI Gateway URL (default: auto-discovered)
   --print-env           Print resolved configuration and exit (token redacted)
   --verbose, -v         Enable debug logging to stderr
@@ -390,7 +424,7 @@ Codex CLI Options:
 }
 
 // handlePrintEnv prints resolved configuration with the token redacted.
-func handlePrintEnv(databricksHost, openaiBaseURL, token, profile, otelLogsTable string) {
+func handlePrintEnv(databricksHost, openaiBaseURL, token, profile, model, otelLogsTable string) {
 	redacted := "**** (redacted)"
 	if strings.HasPrefix(token, "dapi-") {
 		redacted = "dapi-***"
@@ -403,12 +437,13 @@ func handlePrintEnv(databricksHost, openaiBaseURL, token, profile, otelLogsTable
 
 	fmt.Printf(`databricks-codex configuration:
   Profile:           %s
+  Model:             %s
   DATABRICKS_HOST:   %s
   OPENAI_BASE_URL:   %s
   OPENAI_API_KEY:    %s
   OTEL Logs Table:   %s
   Codex binary:      %s
-`, profile, databricksHost, openaiBaseURL, redacted, otelLogsTable, codexPath)
+`, profile, model, databricksHost, openaiBaseURL, redacted, otelLogsTable, codexPath)
 }
 
 // resolveOtelLogsTable returns the OTEL logs table using the resolution chain:

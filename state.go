@@ -12,6 +12,7 @@ import (
 type persistentState struct {
 	Profile       string `json:"profile,omitempty"`
 	OtelLogsTable string `json:"otel_logs_table,omitempty"`
+	Model         string `json:"model,omitempty"`
 }
 
 // statePath returns the path to the persistent state file.
