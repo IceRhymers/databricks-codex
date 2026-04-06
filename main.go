@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/IceRhymers/databricks-claude/pkg/authcheck"
+	"github.com/IceRhymers/databricks-claude/pkg/proxy"
 )
 
 // Version is set at build time via -ldflags.
@@ -77,6 +78,11 @@ func main() {
 	// --- Ensure the user is authenticated before proceeding ---
 	if err := authcheck.EnsureAuthenticated(profile); err != nil {
 		log.Fatalf("databricks-codex: auth failed: %v", err)
+	}
+
+	// --- Startup security checks ---
+	for _, w := range proxy.SecurityChecks() {
+		fmt.Fprintln(os.Stderr, w)
 	}
 
 	// --- Seed token cache ---
