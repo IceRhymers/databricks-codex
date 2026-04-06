@@ -4,7 +4,7 @@ import (
 	"context"
 	"os/exec"
 
-	"github.com/IceRhymers/databricks-codex/pkg/childproc"
+	"github.com/IceRhymers/databricks-claude/pkg/childproc"
 )
 
 // OTEL environment variable keys for Codex telemetry. These are set as env

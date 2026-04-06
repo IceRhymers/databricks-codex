@@ -1,6 +1,6 @@
 package main
 
-import "github.com/IceRhymers/databricks-codex/pkg/registry"
+import "github.com/IceRhymers/databricks-claude/pkg/registry"
 
 type Session = registry.Session
 type SessionRegistry = registry.SessionRegistry

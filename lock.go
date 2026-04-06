@@ -1,6 +1,6 @@
 package main
 
-import "github.com/IceRhymers/databricks-codex/pkg/filelock"
+import "github.com/IceRhymers/databricks-claude/pkg/filelock"
 
 type FileLock = filelock.FileLock
 
