@@ -37,7 +37,7 @@ func main() {
 		log.SetOutput(os.Stderr)
 	}
 	if logFile != "" {
-		f, err := os.OpenFile(logFile, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+		f, err := os.OpenFile(logFile, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
 		if err != nil {
 			log.SetOutput(os.Stderr)
 			log.Fatalf("databricks-codex: cannot open log file %q: %v", logFile, err)

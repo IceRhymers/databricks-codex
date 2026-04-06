@@ -254,6 +254,11 @@ func atomicWrite(path string, data []byte) error {
 		return err
 	}
 	tmpPath := tmp.Name()
+	if err := os.Chmod(tmpPath, 0o600); err != nil {
+		tmp.Close()
+		os.Remove(tmpPath)
+		return err
+	}
 
 	if _, err := tmp.Write(data); err != nil {
 		tmp.Close()
