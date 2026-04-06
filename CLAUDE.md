@@ -28,7 +28,7 @@ Main-package source files plus shared packages in `pkg/`.
 - **Proxy-based with config.toml management** — Like `databricks-claude` (which patches `settings.json`), `databricks-codex` patches `~/.codex/config.toml` to point Codex at a local proxy. The proxy injects live Bearer tokens on every request/WebSocket connection. Config is restored on exit.
 - **WebSocket proxy** — Codex v0.118.0+ uses WebSocket connections to `/responses` (the Responses API). The proxy detects `Upgrade: websocket` headers and uses HTTP hijacking + bidirectional piping instead of `httputil.ReverseProxy`.
 - **Multi-session coordination** — A session registry tracks live processes. On exit, the last session restores the original config; earlier sessions hand off to the most recent survivor.
-- **Profile resolution chain** — `--profile` flag → `DATABRICKS_CONFIG_PROFILE` env var → `"DEFAULT"`.
+- **Profile persistence** — `--profile` flag → `DATABRICKS_CONFIG_PROFILE` env var → saved state (`~/.codex/.databricks-codex.json`) → `"DEFAULT"`. When `--profile` is passed explicitly, it's saved for future sessions. This means orgs with a dedicated AI workspace only need to set the profile once.
 - **Zero external Go dependencies** — pure stdlib only. Shared packages are vendored in `pkg/`.
 - **Token cache** — mutex-guarded `TokenProvider` in `pkg/tokencache`. Tokens are cached and refreshed 5 minutes before expiry.
 - **Gateway URL format** — `https://<workspaceId>.ai-gateway.cloud.databricks.com/openai/v1`. Falls back to `<host>/serving-endpoints/codex/openai/v1` if workspace ID resolution fails.

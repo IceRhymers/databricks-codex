@@ -48,11 +48,27 @@ func main() {
 	}
 
 	// --- Resolve profile ---
+	// Resolution chain: --profile flag → env var → saved state → "DEFAULT".
+	// When --profile is explicitly passed, save it for future sessions.
+	profileExplicit := profile != ""
 	if profile == "" {
 		profile = os.Getenv("DATABRICKS_CONFIG_PROFILE")
 	}
 	if profile == "" {
+		if saved := loadState(); saved.Profile != "" {
+			profile = saved.Profile
+			log.Printf("databricks-codex: using saved profile: %s", profile)
+		}
+	}
+	if profile == "" {
 		profile = "DEFAULT"
+	}
+	if profileExplicit {
+		if err := saveState(persistentState{Profile: profile}); err != nil {
+			log.Printf("databricks-codex: failed to save profile: %v", err)
+		} else {
+			log.Printf("databricks-codex: saved profile %q for future sessions", profile)
+		}
 	}
 	log.Printf("databricks-codex: using profile: %s", profile)
 
@@ -284,7 +300,7 @@ Usage:
   databricks-codex [databricks-codex flags] [codex flags] [codex args]
 
 Databricks-Codex Flags:
-  --profile string      Databricks CLI profile (default: DATABRICKS_CONFIG_PROFILE env or "DEFAULT")
+  --profile string      Databricks CLI profile (saved for future sessions; default: env or "DEFAULT")
   --upstream string     Override the AI Gateway URL (default: auto-discovered)
   --print-env           Print resolved configuration and exit (token redacted)
   --verbose, -v         Enable debug logging to stderr
