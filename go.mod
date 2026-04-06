@@ -2,4 +2,4 @@ module github.com/IceRhymers/databricks-codex
 
 go 1.22
 
-require github.com/IceRhymers/databricks-claude v0.3.0
+require github.com/IceRhymers/databricks-claude v0.4.0
