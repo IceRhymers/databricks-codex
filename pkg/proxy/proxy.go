@@ -1,8 +1,10 @@
 package proxy
 
 import (
+	"bufio"
 	"bytes"
 	"context"
+	"crypto/tls"
 	"io"
 	"log"
 	"net"
@@ -40,8 +42,175 @@ func RecoveryHandler(next http.Handler) http.Handler {
 	})
 }
 
+// isWebSocketUpgrade returns true if the request is a WebSocket upgrade.
+func isWebSocketUpgrade(r *http.Request) bool {
+	return strings.EqualFold(r.Header.Get("Upgrade"), "websocket")
+}
+
+// handleWebSocket proxies a WebSocket upgrade request to the upstream,
+// injecting the Bearer token. After a successful 101 response, it pipes
+// data bidirectionally between client and upstream.
+func handleWebSocket(w http.ResponseWriter, r *http.Request, upstream *url.URL, config *Config) {
+	token, err := config.TokenSource.Token(r.Context())
+	if err != nil {
+		log.Printf("databricks-codex: ws token fetch error: %v", err)
+		http.Error(w, "token fetch failed", http.StatusBadGateway)
+		return
+	}
+
+	// Build upstream path: prepend upstream base path to request path.
+	basePath := strings.TrimRight(upstream.Path, "/")
+	upstreamPath := basePath + r.URL.Path
+
+	// Determine host:port for dialing.
+	dialHost := upstream.Host
+	useTLS := upstream.Scheme == "https" || upstream.Scheme == "wss"
+	if !strings.Contains(dialHost, ":") {
+		if useTLS {
+			dialHost += ":443"
+		} else {
+			dialHost += ":80"
+		}
+	}
+
+	if config.Verbose {
+		log.Printf("databricks-codex: ws upgrade → %s%s (tls=%v)", upstream.Host, upstreamPath, useTLS)
+	}
+
+	// Dial upstream.
+	var upstreamConn net.Conn
+	if useTLS {
+		upstreamConn, err = tls.Dial("tcp", dialHost, &tls.Config{
+			ServerName: upstream.Hostname(),
+		})
+	} else {
+		upstreamConn, err = net.Dial("tcp", dialHost)
+	}
+	if err != nil {
+		log.Printf("databricks-codex: ws dial failed: %v", err)
+		http.Error(w, "upstream dial failed", http.StatusBadGateway)
+		return
+	}
+	defer func() {
+		upstreamConn.Close()
+	}()
+
+	// Build the HTTP upgrade request for the upstream.
+	upgradeReq, err := http.NewRequest(r.Method, (&url.URL{
+		Path:     upstreamPath,
+		RawQuery: r.URL.RawQuery,
+	}).RequestURI(), nil)
+	if err != nil {
+		log.Printf("databricks-codex: ws build request failed: %v", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	// Copy original headers, then override auth + host.
+	for k, vv := range r.Header {
+		for _, v := range vv {
+			upgradeReq.Header.Add(k, v)
+		}
+	}
+	upgradeReq.Header.Set("Authorization", "Bearer "+token)
+	upgradeReq.Header.Set("x-api-key", token)
+	upgradeReq.Header.Set("x-databricks-use-coding-agent-mode", "true")
+	upgradeReq.Host = upstream.Host
+	upgradeReq.Header.Set("Host", upstream.Host)
+
+	// Send the upgrade request to the upstream.
+	if err := upgradeReq.Write(upstreamConn); err != nil {
+		log.Printf("databricks-codex: ws write upgrade failed: %v", err)
+		http.Error(w, "upstream write failed", http.StatusBadGateway)
+		return
+	}
+
+	// Read the upstream response.
+	br := bufio.NewReader(upstreamConn)
+	upstreamResp, err := http.ReadResponse(br, upgradeReq)
+	if err != nil {
+		log.Printf("databricks-codex: ws read response failed: %v", err)
+		http.Error(w, "upstream response failed", http.StatusBadGateway)
+		return
+	}
+
+	// If the upstream did not switch protocols, forward the error to the client.
+	if upstreamResp.StatusCode != http.StatusSwitchingProtocols {
+		body, _ := io.ReadAll(upstreamResp.Body)
+		upstreamResp.Body.Close()
+		log.Printf("databricks-codex: ws upgrade rejected: %d %s", upstreamResp.StatusCode, string(body))
+		w.WriteHeader(upstreamResp.StatusCode)
+		w.Write(body)
+		return
+	}
+
+	// Hijack the client connection.
+	hijacker, ok := w.(http.Hijacker)
+	if !ok {
+		log.Printf("databricks-codex: ResponseWriter does not support hijacking")
+		http.Error(w, "hijack not supported", http.StatusInternalServerError)
+		return
+	}
+	clientConn, clientBuf, err := hijacker.Hijack()
+	if err != nil {
+		log.Printf("databricks-codex: ws hijack failed: %v", err)
+		return
+	}
+	defer clientConn.Close()
+
+	// Forward the 101 Switching Protocols response to the client.
+	if err := upstreamResp.Write(clientConn); err != nil {
+		log.Printf("databricks-codex: ws write 101 to client failed: %v", err)
+		return
+	}
+
+	if config.Verbose {
+		log.Printf("databricks-codex: ws connected, piping data")
+	}
+
+	// Bidirectional pipe. When either direction finishes, close both.
+	done := make(chan struct{}, 2)
+
+	// Client → Upstream
+	go func() {
+		defer func() { done <- struct{}{} }()
+		// Flush any buffered data from the client's bufio reader first.
+		if clientBuf != nil && clientBuf.Reader.Buffered() > 0 {
+			buffered := make([]byte, clientBuf.Reader.Buffered())
+			n, _ := clientBuf.Read(buffered)
+			if n > 0 {
+				upstreamConn.Write(buffered[:n])
+			}
+		}
+		io.Copy(upstreamConn, clientConn)
+	}()
+
+	// Upstream → Client
+	go func() {
+		defer func() { done <- struct{}{} }()
+		// Flush any buffered data from the upstream's bufio reader first.
+		if br.Buffered() > 0 {
+			buffered := make([]byte, br.Buffered())
+			n, _ := br.Read(buffered)
+			if n > 0 {
+				clientConn.Write(buffered[:n])
+			}
+		}
+		io.Copy(clientConn, upstreamConn)
+	}()
+
+	// Wait for one direction to finish, then close both.
+	<-done
+
+	if config.Verbose {
+		log.Printf("databricks-codex: ws connection closed")
+	}
+}
+
 // NewServer returns an http.Handler that routes requests to the
 // inference upstream (default) and the OTEL upstream (/otel/).
+// WebSocket upgrade requests on the default route are handled via
+// HTTP hijacking with bidirectional piping.
 func NewServer(config *Config) http.Handler {
 	mux := http.NewServeMux()
 
@@ -150,8 +319,17 @@ func NewServer(config *Config) http.Handler {
 		FlushInterval: -1,
 	}
 
+	// Wrap inference proxy with WebSocket upgrade detection.
+	inferenceHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if isWebSocketUpgrade(r) {
+			handleWebSocket(w, r, inferenceUpstream, config)
+			return
+		}
+		inferenceProxy.ServeHTTP(w, r)
+	})
+
 	mux.Handle("/otel/", RecoveryHandler(otelProxy))
-	mux.Handle("/", RecoveryHandler(inferenceProxy))
+	mux.Handle("/", RecoveryHandler(inferenceHandler))
 
 	return mux
 }

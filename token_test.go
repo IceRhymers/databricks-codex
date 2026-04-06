@@ -93,7 +93,7 @@ func futureExpiry() string {
 // TestTokenProvider_FreshToken: subprocess returns valid JSON -> token is cached.
 func TestTokenProvider_FreshToken(t *testing.T) {
 	bin := buildHelperBinary(t, validTokenJSON("tok-fresh", futureExpiry()), 0)
-	tp := NewTokenProvider(bin)
+	tp := NewTokenProvider(bin, "")
 
 	tok, err := tp.Token(context.Background())
 	if err != nil {
@@ -110,7 +110,7 @@ func TestTokenProvider_FreshToken(t *testing.T) {
 // TestTokenProvider_CacheHit: second call within expiry window skips subprocess.
 func TestTokenProvider_CacheHit(t *testing.T) {
 	bin := buildHelperBinary(t, validTokenJSON("tok-cached", futureExpiry()), 0)
-	tp := NewTokenProvider(bin)
+	tp := NewTokenProvider(bin, "")
 
 	if _, err := tp.Token(context.Background()); err != nil {
 		t.Fatalf("first call: %v", err)
@@ -128,7 +128,7 @@ func TestTokenProvider_CacheHit(t *testing.T) {
 // TestTokenProvider_RefreshNearExpiry: token within 5 min of expiry triggers refresh.
 func TestTokenProvider_RefreshNearExpiry(t *testing.T) {
 	bin := buildHelperBinary(t, validTokenJSON("tok-refreshed", futureExpiry()), 0)
-	tp := NewTokenProvider(bin)
+	tp := NewTokenProvider(bin, "")
 	tp.SetCache("tok-old", time.Now().Add(3*time.Minute)) // within 5-minute buffer
 
 	tok, err := tp.Token(context.Background())
@@ -143,7 +143,7 @@ func TestTokenProvider_RefreshNearExpiry(t *testing.T) {
 // TestTokenProvider_FallbackOnError: subprocess fails -> last cached token returned.
 func TestTokenProvider_FallbackOnError(t *testing.T) {
 	failBin := buildHelperBinary(t, "", 1)
-	tp := NewTokenProvider(failBin)
+	tp := NewTokenProvider(failBin, "")
 	tp.SetCache("tok-last-good", time.Now().Add(-1*time.Minute))
 
 	tok, err := tp.Token(context.Background())
@@ -158,7 +158,7 @@ func TestTokenProvider_FallbackOnError(t *testing.T) {
 // TestTokenProvider_NoCachedTokenError: first call fails with no cache -> returns error.
 func TestTokenProvider_NoCachedTokenError(t *testing.T) {
 	failBin := buildHelperBinary(t, "", 1)
-	tp := NewTokenProvider(failBin)
+	tp := NewTokenProvider(failBin, "")
 
 	_, err := tp.Token(context.Background())
 	if err == nil {
@@ -169,7 +169,7 @@ func TestTokenProvider_NoCachedTokenError(t *testing.T) {
 // TestTokenProvider_SubprocessTimeout: slow subprocess doesn't block forever.
 func TestTokenProvider_SubprocessTimeout(t *testing.T) {
 	slowBin := buildSlowBinary(t)
-	tp := NewTokenProvider(slowBin)
+	tp := NewTokenProvider(slowBin, "")
 
 	start := time.Now()
 	_, err := tp.Token(context.Background())
@@ -256,7 +256,7 @@ func TestDiscoverHost_Success(t *testing.T) {
 	payload := `{"env":{"DATABRICKS_HOST":"https://dbc-abc123.cloud.databricks.com"}}`
 	bin := buildAuthEnvBinary(t, payload, 0)
 
-	host, err := DiscoverHost(bin)
+	host, err := DiscoverHost(bin, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -271,7 +271,7 @@ func TestDiscoverHost_MissingHost(t *testing.T) {
 	payload := `{"env":{"DATABRICKS_TOKEN":"some-token"}}`
 	bin := buildAuthEnvBinary(t, payload, 0)
 
-	_, err := DiscoverHost(bin)
+	_, err := DiscoverHost(bin, "")
 	if err == nil {
 		t.Fatal("expected error when DATABRICKS_HOST missing, got nil")
 	}
@@ -281,7 +281,7 @@ func TestDiscoverHost_MissingHost(t *testing.T) {
 func TestDiscoverHost_CommandFails(t *testing.T) {
 	bin := buildAuthEnvBinary(t, "", 1)
 
-	_, err := DiscoverHost(bin)
+	_, err := DiscoverHost(bin, "")
 	if err == nil {
 		t.Fatal("expected error when command fails, got nil")
 	}
@@ -330,7 +330,7 @@ func TestResolveWorkspaceID_Non200(t *testing.T) {
 	}
 }
 
-// TestConstructGatewayURL_WithWorkspaceID: resolves workspace ID -> uses /openai/v1 suffix.
+// TestConstructGatewayURL_WithWorkspaceID: resolves workspace ID -> uses AI Gateway domain.
 func TestConstructGatewayURL_WithWorkspaceID(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("x-databricks-org-id", "9876543210")
@@ -339,7 +339,7 @@ func TestConstructGatewayURL_WithWorkspaceID(t *testing.T) {
 	defer srv.Close()
 
 	got := ConstructGatewayURL(srv.URL, "test-token")
-	want := srv.URL + "/serving-endpoints/9876543210.aws.proxy.codex/openai/v1"
+	want := "https://9876543210.ai-gateway.cloud.databricks.com/openai/v1"
 	if got != want {
 		t.Errorf("got %q, want %q", got, want)
 	}
