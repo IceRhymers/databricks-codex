@@ -67,7 +67,9 @@ func main() {
 		profile = "DEFAULT"
 	}
 	if profileExplicit {
-		if err := saveState(persistentState{Profile: profile}); err != nil {
+		saved := loadState()
+		saved.Profile = profile
+		if err := saveState(saved); err != nil {
 			log.Printf("databricks-codex: failed to save profile: %v", err)
 		} else {
 			log.Printf("databricks-codex: saved profile %q for future sessions", profile)
@@ -110,9 +112,21 @@ func main() {
 	}
 	log.Printf("databricks-codex: gateway URL: %s", gatewayURL)
 
-	// --- OTEL tables ---
-	if !otelLogsTableSet {
-		otelLogsTable = "main.codex_telemetry.codex_otel_logs"
+	// --- OTEL logs table ---
+	// Resolution chain: --otel-logs-table flag → saved state → default.
+	otelLogsTableExplicit := otelLogsTableSet
+	otelLogsTable = resolveOtelLogsTable(otelLogsTable, otelLogsTableSet, loadState().OtelLogsTable)
+	if !otelLogsTableExplicit && otelLogsTable != "main.codex_telemetry.codex_otel_logs" {
+		log.Printf("databricks-codex: using saved otel-logs-table: %s", otelLogsTable)
+	}
+	if otelLogsTableExplicit {
+		saved := loadState()
+		saved.OtelLogsTable = otelLogsTable
+		if err := saveState(saved); err != nil {
+			log.Printf("databricks-codex: failed to save otel-logs-table: %v", err)
+		} else {
+			log.Printf("databricks-codex: saved otel-logs-table %q for future sessions", otelLogsTable)
+		}
 	}
 	if noOtel {
 		otel = false
@@ -120,7 +134,7 @@ func main() {
 
 	// --- Print env and exit if requested ---
 	if printEnv {
-		handlePrintEnv(host, gatewayURL, initialToken, profile)
+		handlePrintEnv(host, gatewayURL, initialToken, profile, otelLogsTable)
 		os.Exit(0)
 	}
 
@@ -344,7 +358,7 @@ Databricks-Codex Flags:
   --log-file string     Write debug logs to a file (combinable with --verbose)
   --otel                    Enable OpenTelemetry log export
   --no-otel                 Disable OpenTelemetry for this session
-  --otel-logs-table string  Unity Catalog table for OTEL logs (default: main.codex_telemetry.codex_otel_logs)
+  --otel-logs-table string  Unity Catalog table for OTEL logs (saved for future sessions; default: main.codex_telemetry.codex_otel_logs)
   --proxy-api-key string    Require this API key on all proxy requests (default: disabled)
   --tls-cert string         Path to TLS certificate file (requires --tls-key)
   --tls-key string          Path to TLS private key file (requires --tls-cert)
@@ -376,7 +390,7 @@ Codex CLI Options:
 }
 
 // handlePrintEnv prints resolved configuration with the token redacted.
-func handlePrintEnv(databricksHost, openaiBaseURL, token, profile string) {
+func handlePrintEnv(databricksHost, openaiBaseURL, token, profile, otelLogsTable string) {
 	redacted := "**** (redacted)"
 	if strings.HasPrefix(token, "dapi-") {
 		redacted = "dapi-***"
@@ -392,7 +406,20 @@ func handlePrintEnv(databricksHost, openaiBaseURL, token, profile string) {
   DATABRICKS_HOST:   %s
   OPENAI_BASE_URL:   %s
   OPENAI_API_KEY:    %s
+  OTEL Logs Table:   %s
   Codex binary:      %s
-`, profile, databricksHost, openaiBaseURL, redacted, codexPath)
+`, profile, databricksHost, openaiBaseURL, redacted, otelLogsTable, codexPath)
+}
+
+// resolveOtelLogsTable returns the OTEL logs table using the resolution chain:
+// explicit flag → saved state → default.
+func resolveOtelLogsTable(flagValue string, flagSet bool, savedValue string) string {
+	if flagSet && flagValue != "" {
+		return flagValue
+	}
+	if savedValue != "" {
+		return savedValue
+	}
+	return "main.codex_telemetry.codex_otel_logs"
 }
 

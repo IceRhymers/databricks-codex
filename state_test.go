@@ -65,3 +65,58 @@ func TestSaveState_OverwritesPrevious(t *testing.T) {
 		t.Errorf("got profile %q, want %q", s.Profile, "second")
 	}
 }
+
+func TestSaveAndLoadState_OtelLogsTable(t *testing.T) {
+	dir := t.TempDir()
+	orig := statePath
+	statePath = func() string { return filepath.Join(dir, "state.json") }
+	defer func() { statePath = orig }()
+
+	if err := saveState(persistentState{OtelLogsTable: "custom.db.logs"}); err != nil {
+		t.Fatalf("saveState: %v", err)
+	}
+
+	s := loadState()
+	if s.OtelLogsTable != "custom.db.logs" {
+		t.Errorf("got OtelLogsTable %q, want %q", s.OtelLogsTable, "custom.db.logs")
+	}
+}
+
+func TestSaveState_PreservesExistingFields(t *testing.T) {
+	dir := t.TempDir()
+	orig := statePath
+	statePath = func() string { return filepath.Join(dir, "state.json") }
+	defer func() { statePath = orig }()
+
+	// Save with profile only.
+	saveState(persistentState{Profile: "aidev"})
+
+	// Read-modify-write: add OtelLogsTable while preserving Profile.
+	s := loadState()
+	s.OtelLogsTable = "custom.db.logs"
+	saveState(s)
+
+	// Verify both fields survive.
+	s = loadState()
+	if s.Profile != "aidev" {
+		t.Errorf("got Profile %q, want %q", s.Profile, "aidev")
+	}
+	if s.OtelLogsTable != "custom.db.logs" {
+		t.Errorf("got OtelLogsTable %q, want %q", s.OtelLogsTable, "custom.db.logs")
+	}
+}
+
+func TestSaveState_OverwritesOtelLogsTable(t *testing.T) {
+	dir := t.TempDir()
+	orig := statePath
+	statePath = func() string { return filepath.Join(dir, "state.json") }
+	defer func() { statePath = orig }()
+
+	saveState(persistentState{OtelLogsTable: "first.table"})
+	saveState(persistentState{OtelLogsTable: "second.table"})
+
+	s := loadState()
+	if s.OtelLogsTable != "second.table" {
+		t.Errorf("got OtelLogsTable %q, want %q", s.OtelLogsTable, "second.table")
+	}
+}
