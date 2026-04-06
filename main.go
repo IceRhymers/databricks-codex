@@ -18,7 +18,7 @@ import (
 var Version = "dev"
 
 func main() {
-	verbose, version, showHelp, printEnv, noOtel, otelLogsTable, otelLogsTableSet, upstream, logFile, profile, otel, codexArgs := parseArgs(os.Args[1:])
+	verbose, version, showHelp, printEnv, noOtel, otelLogsTable, otelLogsTableSet, upstream, logFile, profile, otel, proxyAPIKey, tlsCert, tlsKey, codexArgs := parseArgs(os.Args[1:])
 
 	if showHelp {
 		handleHelp(upstream)
@@ -78,6 +78,11 @@ func main() {
 	// --- Ensure the user is authenticated before proceeding ---
 	if err := authcheck.EnsureAuthenticated(profile); err != nil {
 		log.Fatalf("databricks-codex: auth failed: %v", err)
+	}
+
+	// --- TLS validation ---
+	if err := proxy.ValidateTLSConfig(tlsCert, tlsKey); err != nil {
+		log.Fatalf("databricks-codex: %v", err)
 	}
 
 	// --- Startup security checks ---
@@ -142,13 +147,20 @@ func main() {
 		UCLogsTable:       otelLogsTable,
 		TokenProvider:     tp,
 		Verbose:           verbose,
+		APIKey:            proxyAPIKey,
+		TLSCertFile:       tlsCert,
+		TLSKeyFile:        tlsKey,
 	})
-	listener, err := StartProxy(proxyHandler)
+	listener, err := StartProxy(proxyHandler, tlsCert, tlsKey)
 	if err != nil {
 		log.Fatalf("databricks-codex: failed to start proxy: %v", err)
 	}
 	defer listener.Close()
-	proxyAddr := "http://" + listener.Addr().String()
+	proxyScheme := "http://"
+	if tlsCert != "" && tlsKey != "" {
+		proxyScheme = "https://"
+	}
+	proxyAddr := proxyScheme + listener.Addr().String()
 	log.Printf("databricks-codex: local proxy %s -> %s", proxyAddr, gatewayURL)
 
 	// --- Patch config.toml to point Codex at the local proxy ---
@@ -190,7 +202,7 @@ func main() {
 }
 
 // parseArgs separates databricks-codex flags from codex flags.
-func parseArgs(args []string) (verbose bool, version bool, showHelp bool, printEnv bool, noOtel bool, otelLogsTable string, otelLogsTableSet bool, upstream string, logFile string, profile string, otel bool, codexArgs []string) {
+func parseArgs(args []string) (verbose bool, version bool, showHelp bool, printEnv bool, noOtel bool, otelLogsTable string, otelLogsTableSet bool, upstream string, logFile string, profile string, otel bool, proxyAPIKey string, tlsCert string, tlsKey string, codexArgs []string) {
 	knownFlags := map[string]bool{
 		"--verbose":         true,
 		"--version":         true,
@@ -202,6 +214,9 @@ func parseArgs(args []string) (verbose bool, version bool, showHelp bool, printE
 		"--upstream":        true,
 		"--log-file":        true,
 		"--profile":         true,
+		"--proxy-api-key":   true,
+		"--tls-cert":        true,
+		"--tls-key":         true,
 	}
 
 	i := 0
@@ -265,6 +280,27 @@ func parseArgs(args []string) (verbose bool, version bool, showHelp bool, printE
 						i++
 						profile = args[i]
 					}
+				case "--proxy-api-key":
+					if value != "" {
+						proxyAPIKey = value
+					} else if i+1 < len(args) {
+						i++
+						proxyAPIKey = args[i]
+					}
+				case "--tls-cert":
+					if value != "" {
+						tlsCert = value
+					} else if i+1 < len(args) {
+						i++
+						tlsCert = args[i]
+					}
+				case "--tls-key":
+					if value != "" {
+						tlsKey = value
+					} else if i+1 < len(args) {
+						i++
+						tlsKey = args[i]
+					}
 				case "--verbose":
 					verbose = true
 				case "--version":
@@ -309,6 +345,9 @@ Databricks-Codex Flags:
   --otel                    Enable OpenTelemetry log export
   --no-otel                 Disable OpenTelemetry for this session
   --otel-logs-table string  Unity Catalog table for OTEL logs (default: main.codex_telemetry.codex_otel_logs)
+  --proxy-api-key string    Require this API key on all proxy requests (default: disabled)
+  --tls-cert string         Path to TLS certificate file (requires --tls-key)
+  --tls-key string          Path to TLS private key file (requires --tls-cert)
   --version             Print version and exit
   --help, -h            Show this help message
 

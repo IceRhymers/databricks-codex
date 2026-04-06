@@ -15,6 +15,9 @@ type ProxyConfig struct {
 	UCLogsTable       string
 	TokenProvider     *tokencache.TokenProvider
 	Verbose           bool
+	APIKey            string
+	TLSCertFile       string
+	TLSKeyFile        string
 }
 
 // NewProxyServer returns an http.Handler that routes requests to the
@@ -26,11 +29,15 @@ func NewProxyServer(config *ProxyConfig) http.Handler {
 		UCLogsTable:       config.UCLogsTable,
 		TokenSource:       config.TokenProvider,
 		Verbose:           config.Verbose,
+		APIKey:            config.APIKey,
+		TLSCertFile:       config.TLSCertFile,
+		TLSKeyFile:        config.TLSKeyFile,
 	})
 }
 
 // StartProxy binds to 127.0.0.1:0, starts serving, and returns the listener.
 // Callers read l.Addr() to discover the assigned port.
-func StartProxy(handler http.Handler) (net.Listener, error) {
-	return proxy.Start(handler)
+// When certFile and keyFile are both non-empty, the listener serves TLS.
+func StartProxy(handler http.Handler, certFile, keyFile string) (net.Listener, error) {
+	return proxy.Start(handler, certFile, keyFile)
 }
