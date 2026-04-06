@@ -9,6 +9,8 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+
+	"github.com/IceRhymers/databricks-claude/pkg/authcheck"
 )
 
 // Version is set at build time via -ldflags.
@@ -71,6 +73,11 @@ func main() {
 		}
 	}
 	log.Printf("databricks-codex: using profile: %s", profile)
+
+	// --- Ensure the user is authenticated before proceeding ---
+	if err := authcheck.EnsureAuthenticated(profile); err != nil {
+		log.Fatalf("databricks-codex: auth failed: %v", err)
+	}
 
 	// --- Seed token cache ---
 	tp := NewTokenProvider("", profile)
