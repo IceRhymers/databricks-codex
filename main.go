@@ -146,8 +146,13 @@ func main() {
 	// This is the Codex equivalent of databricks-claude patching settings.json.
 	// The proxy URL is written as a model_provider in config.toml with
 	// wire_api = "responses" so Codex uses the Responses API via WebSocket.
+	otelConfigEndpoint := ""
+	if otel {
+		otelConfigEndpoint = proxyAddr + "/otel/v1/logs"
+	}
+
 	cm := NewConfigManager()
-	if err := cm.Setup(proxyAddr, "databricks-gpt-5-4"); err != nil {
+	if err := cm.Setup(proxyAddr, "databricks-gpt-5-4", otelConfigEndpoint); err != nil {
 		log.Fatalf("databricks-codex: failed to patch config.toml: %v", err)
 	}
 
@@ -155,19 +160,7 @@ func main() {
 	// Authorization header with a live Databricks token per request.
 	os.Setenv("OPENAI_API_KEY", "databricks-proxy")
 
-	// --- Inject OTEL env vars when enabled ---
 	if otel {
-		otelBase := proxyAddr + "/otel"
-		os.Setenv("OTEL_EXPORTER_OTLP_METRICS_ENDPOINT", otelBase+"/v1/metrics")
-		os.Setenv("OTEL_EXPORTER_OTLP_METRICS_HEADERS", "content-type=application/x-protobuf")
-		os.Setenv("OTEL_METRICS_EXPORTER", "otlp")
-		os.Setenv("OTEL_EXPORTER_OTLP_METRICS_PROTOCOL", "http/protobuf")
-		os.Setenv("OTEL_METRIC_EXPORT_INTERVAL", "10000")
-		os.Setenv("OTEL_EXPORTER_OTLP_LOGS_ENDPOINT", otelBase+"/v1/logs")
-		os.Setenv("OTEL_EXPORTER_OTLP_LOGS_HEADERS", "content-type=application/x-protobuf")
-		os.Setenv("OTEL_EXPORTER_OTLP_LOGS_PROTOCOL", "http/protobuf")
-		os.Setenv("OTEL_LOGS_EXPORTER", "otlp")
-		os.Setenv("OTEL_LOGS_EXPORT_INTERVAL", "5000")
 		log.Printf("databricks-codex: OTEL enabled — metrics=%s logs=%s", otelMetricsTable, otelLogsTable)
 	}
 

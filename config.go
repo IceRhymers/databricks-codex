@@ -36,7 +36,9 @@ func NewConfigManager() *ConfigManager {
 
 // Setup backs up config.toml, patches it with the proxy config, and
 // registers the current session. The caller must call Restore on exit.
-func (cm *ConfigManager) Setup(proxyURL, model string) error {
+// otelEndpoint is the OTLP HTTP log endpoint (e.g., "http://127.0.0.1:PORT/otel/v1/logs");
+// pass "" to omit the [otel] section.
+func (cm *ConfigManager) Setup(proxyURL, model, otelEndpoint string) error {
 	if err := cm.lock.Lock(); err != nil {
 		log.Printf("databricks-codex: config lock warning: %v", err)
 	}
@@ -50,8 +52,9 @@ func (cm *ConfigManager) Setup(proxyURL, model string) error {
 	}
 
 	if err := cm.config.Patch(tomlconfig.PatchConfig{
-		ProxyURL: proxyURL,
-		Model:    model,
+		ProxyURL:     proxyURL,
+		Model:        model,
+		OTELEndpoint: otelEndpoint,
 	}); err != nil {
 		return err
 	}

@@ -13,8 +13,9 @@ import (
 
 // PatchConfig holds the values to inject into config.toml.
 type PatchConfig struct {
-	ProxyURL string // e.g., "http://127.0.0.1:54321"
-	Model    string // e.g., "databricks-gpt-5-4"
+	ProxyURL     string // e.g., "http://127.0.0.1:54321"
+	Model        string // e.g., "databricks-gpt-5-4"
+	OTELEndpoint string // e.g., "http://127.0.0.1:54321/otel/v1/logs"; empty = no [otel] section
 }
 
 // Manager reads, patches, and restores the Codex config.toml file.
@@ -95,6 +96,14 @@ func (m *Manager) Patch(cfg PatchConfig) error {
 	b.WriteString("env_key = \"OPENAI_API_KEY\"\n")
 	b.WriteString("wire_api = \"responses\"\n")
 	b.WriteString("\n")
+
+	// Write the OTEL exporter section when enabled.
+	if cfg.OTELEndpoint != "" {
+		b.WriteString("[otel]\n")
+		b.WriteString("environment = \"production\"\n")
+		b.WriteString(fmt.Sprintf("exporter = { otlp-http = { endpoint = %q, protocol = \"binary\" } }\n", cfg.OTELEndpoint))
+		b.WriteString("\n")
+	}
 
 	// Preserve user sections.
 	if userSections != "" {
@@ -177,6 +186,7 @@ func extractUserSections(original []byte) string {
 	managedSections := []string{
 		"[profiles.databricks-proxy]",
 		"[model_providers.databricks-proxy]",
+		"[otel]",
 	}
 	managedRootKeys := []string{
 		"profile",
