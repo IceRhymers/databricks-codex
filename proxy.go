@@ -12,7 +12,6 @@ import (
 type ProxyConfig struct {
 	InferenceUpstream string
 	OTELUpstream      string
-	UCMetricsTable    string
 	UCLogsTable       string
 	TokenProvider     *tokencache.TokenProvider
 	Verbose           bool
@@ -24,7 +23,6 @@ func NewProxyServer(config *ProxyConfig) http.Handler {
 	return proxy.NewServer(&proxy.Config{
 		InferenceUpstream: config.InferenceUpstream,
 		OTELUpstream:      config.OTELUpstream,
-		UCMetricsTable:    config.UCMetricsTable,
 		UCLogsTable:       config.UCLogsTable,
 		TokenSource:       config.TokenProvider,
 		Verbose:           config.Verbose,

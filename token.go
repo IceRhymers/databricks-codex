@@ -25,13 +25,14 @@ type tokenResponse struct {
 // databricksFetcher implements tokencache.TokenFetcher using the Databricks CLI.
 type databricksFetcher struct {
 	cmdName string
+	profile string
 }
 
 func (f *databricksFetcher) FetchToken(ctx context.Context) (string, time.Time, error) {
 	fetchCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(fetchCtx, f.cmdName, "auth", "token")
+	cmd := exec.CommandContext(fetchCtx, f.cmdName, "auth", "token", "--profile", f.profile)
 	out, err := cmd.Output()
 	if err != nil {
 		return "", time.Time{}, fmt.Errorf("databricks auth token failed: %w", err)
@@ -46,13 +47,17 @@ func (f *databricksFetcher) FetchToken(ctx context.Context) (string, time.Time, 
 }
 
 // NewTokenProvider creates a new TokenProvider backed by the Databricks CLI.
-// cmdName defaults to "databricks" if empty.
-func NewTokenProvider(cmdName string) *TokenProvider {
+// cmdName defaults to "databricks" if empty; profile defaults to "DEFAULT".
+func NewTokenProvider(cmdName, profile string) *TokenProvider {
 	if cmdName == "" {
 		cmdName = "databricks"
 	}
+	if profile == "" {
+		profile = "DEFAULT"
+	}
 	return tokencache.NewTokenProvider(&databricksFetcher{
 		cmdName: cmdName,
+		profile: profile,
 	})
 }
 
@@ -90,14 +95,17 @@ type authEnvResponse struct {
 
 // DiscoverHost calls "databricks auth env --output json"
 // and extracts the DATABRICKS_HOST value from the response.
-func DiscoverHost(cmdName string) (string, error) {
+func DiscoverHost(cmdName, profile string) (string, error) {
 	if cmdName == "" {
 		cmdName = "databricks"
+	}
+	if profile == "" {
+		profile = "DEFAULT"
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, cmdName, "auth", "env", "--output", "json")
+	cmd := exec.CommandContext(ctx, cmdName, "auth", "env", "--profile", profile, "--output", "json")
 	out, err := cmd.Output()
 	if err != nil {
 		return "", fmt.Errorf("databricks auth env failed: %w", err)
@@ -143,14 +151,15 @@ func ResolveWorkspaceID(host, token string) (string, error) {
 }
 
 // ConstructGatewayURL builds the AI Gateway URL for the Codex proxy endpoint.
-// Format: https://{host}/serving-endpoints/{workspaceId}.aws.proxy.codex/openai/v1
+// Format: https://{workspaceId}.ai-gateway.cloud.databricks.com/openai/v1
+// Fallback: {host}/serving-endpoints/codex/openai/v1
 func ConstructGatewayURL(host, token string) string {
 	workspaceID, err := ResolveWorkspaceID(host, token)
 	if err != nil {
 		log.Printf("workspace ID resolution failed: %v", err)
 		return host + "/serving-endpoints/codex/openai/v1"
 	}
-	gatewayURL := host + "/serving-endpoints/" + workspaceID + ".aws.proxy.codex/openai/v1"
+	gatewayURL := "https://" + workspaceID + ".ai-gateway.cloud.databricks.com/openai/v1"
 	log.Printf("resolved workspace ID %s, using gateway URL: %s", workspaceID, gatewayURL)
 	return gatewayURL
 }

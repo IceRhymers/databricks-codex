@@ -13,80 +13,80 @@ import (
 // --- parseArgs tests ---
 
 func TestParseArgs_HelpLong(t *testing.T) {
-	verbose, version, showHelp, printEnv, noOtel, _, _, upstream, logFile, codexArgs := parseArgs([]string{"--help"})
+	verbose, version, showHelp, printEnv, noOtel, _, _, upstream, logFile, profile, otel, codexArgs := parseArgs([]string{"--help"})
 	if !showHelp {
 		t.Error("expected showHelp=true for --help")
 	}
-	if verbose || version || printEnv || noOtel || upstream != "" || logFile != "" || len(codexArgs) != 0 {
+	if verbose || version || printEnv || noOtel || otel || upstream != "" || logFile != "" || profile != "" || len(codexArgs) != 0 {
 		t.Error("unexpected non-default values alongside --help")
 	}
 }
 
 func TestParseArgs_HelpShort(t *testing.T) {
-	_, _, showHelp, _, _, _, _, _, _, _ := parseArgs([]string{"-h"})
+	_, _, showHelp, _, _, _, _, _, _, _, _, _ := parseArgs([]string{"-h"})
 	if !showHelp {
 		t.Error("expected showHelp=true for -h")
 	}
 }
 
 func TestParseArgs_PrintEnv(t *testing.T) {
-	_, _, _, printEnv, _, _, _, _, _, _ := parseArgs([]string{"--print-env"})
+	_, _, _, printEnv, _, _, _, _, _, _, _, _ := parseArgs([]string{"--print-env"})
 	if !printEnv {
 		t.Error("expected printEnv=true for --print-env")
 	}
 }
 
 func TestParseArgs_Version(t *testing.T) {
-	_, version, _, _, _, _, _, _, _, _ := parseArgs([]string{"--version"})
+	_, version, _, _, _, _, _, _, _, _, _, _ := parseArgs([]string{"--version"})
 	if !version {
 		t.Error("expected version=true for --version")
 	}
 }
 
 func TestParseArgs_Verbose(t *testing.T) {
-	verbose, _, _, _, _, _, _, _, _, _ := parseArgs([]string{"--verbose"})
+	verbose, _, _, _, _, _, _, _, _, _, _, _ := parseArgs([]string{"--verbose"})
 	if !verbose {
 		t.Error("expected verbose=true for --verbose")
 	}
 }
 
 func TestParseArgs_VerboseShort(t *testing.T) {
-	verbose, _, _, _, _, _, _, _, _, _ := parseArgs([]string{"-v"})
+	verbose, _, _, _, _, _, _, _, _, _, _, _ := parseArgs([]string{"-v"})
 	if !verbose {
 		t.Error("expected verbose=true for -v")
 	}
 }
 
 func TestParseArgs_LogFile(t *testing.T) {
-	_, _, _, _, _, _, _, _, logFile, _ := parseArgs([]string{"--log-file", "/tmp/test.log"})
+	_, _, _, _, _, _, _, _, logFile, _, _, _ := parseArgs([]string{"--log-file", "/tmp/test.log"})
 	if logFile != "/tmp/test.log" {
 		t.Errorf("expected logFile=%q, got %q", "/tmp/test.log", logFile)
 	}
 }
 
 func TestParseArgs_LogFileEquals(t *testing.T) {
-	_, _, _, _, _, _, _, _, logFile, _ := parseArgs([]string{"--log-file=/tmp/test.log"})
+	_, _, _, _, _, _, _, _, logFile, _, _, _ := parseArgs([]string{"--log-file=/tmp/test.log"})
 	if logFile != "/tmp/test.log" {
 		t.Errorf("expected logFile=%q, got %q", "/tmp/test.log", logFile)
 	}
 }
 
 func TestParseArgs_Upstream(t *testing.T) {
-	_, _, _, _, _, _, _, upstream, _, _ := parseArgs([]string{"--upstream", "https://gw.example.com/openai/v1"})
+	_, _, _, _, _, _, _, upstream, _, _, _, _ := parseArgs([]string{"--upstream", "https://gw.example.com/openai/v1"})
 	if upstream != "https://gw.example.com/openai/v1" {
 		t.Errorf("expected upstream=%q, got %q", "https://gw.example.com/openai/v1", upstream)
 	}
 }
 
 func TestParseArgs_UpstreamEquals(t *testing.T) {
-	_, _, _, _, _, _, _, upstream, _, _ := parseArgs([]string{"--upstream=https://gw.example.com/openai/v1"})
+	_, _, _, _, _, _, _, upstream, _, _, _, _ := parseArgs([]string{"--upstream=https://gw.example.com/openai/v1"})
 	if upstream != "https://gw.example.com/openai/v1" {
 		t.Errorf("expected upstream=%q, got %q", "https://gw.example.com/openai/v1", upstream)
 	}
 }
 
 func TestParseArgs_NoOtel(t *testing.T) {
-	_, _, _, _, noOtel, _, _, _, _, codexArgs := parseArgs([]string{"--no-otel"})
+	_, _, _, _, noOtel, _, _, _, _, _, _, codexArgs := parseArgs([]string{"--no-otel"})
 	if !noOtel {
 		t.Error("expected noOtel=true for --no-otel")
 	}
@@ -95,46 +95,38 @@ func TestParseArgs_NoOtel(t *testing.T) {
 	}
 }
 
-func TestParseArgs_OtelTable(t *testing.T) {
-	_, _, _, _, _, otelTable, otelTableSet, _, _, _ := parseArgs([]string{"--otel-table", "main.custom.metrics"})
-	if !otelTableSet {
-		t.Error("expected otelTableSet=true when --otel-table is passed")
+
+
+
+
+func TestParseArgs_OtelLogsTable(t *testing.T) {
+	_, _, _, _, _, otelLogsTable, otelLogsTableSet, _, _, _, _, _ := parseArgs([]string{"--otel-logs-table", "main.custom.logs"})
+	if !otelLogsTableSet {
+		t.Error("expected otelLogsTableSet=true when --otel-logs-table is passed")
 	}
-	if otelTable != "main.custom.metrics" {
-		t.Errorf("expected otelTable=%q, got %q", "main.custom.metrics", otelTable)
+	if otelLogsTable != "main.custom.logs" {
+		t.Errorf("expected otelLogsTable=%q, got %q", "main.custom.logs", otelLogsTable)
 	}
+}
+func TestParseArgs_OtelLogsTableDefault(t *testing.T) {
+	_, _, _, _, _, otelLogsTable, otelLogsTableSet, _, _, _, _, _ := parseArgs([]string{})
+	if otelLogsTableSet {
+		t.Error("expected otelLogsTableSet=false when --otel-logs-table is not passed")
+	}
+	_ = otelLogsTable // default applied in main(), not parseArgs
 }
 
-func TestParseArgs_OtelTableEquals(t *testing.T) {
-	_, _, _, _, _, otelTable, otelTableSet, _, _, _ := parseArgs([]string{"--otel-table=main.custom.metrics"})
-	if !otelTableSet {
-		t.Error("expected otelTableSet=true for --otel-table=value")
-	}
-	if otelTable != "main.custom.metrics" {
-		t.Errorf("expected otelTable=%q, got %q", "main.custom.metrics", otelTable)
-	}
-}
-
-func TestParseArgs_OtelTableDefault(t *testing.T) {
-	_, _, _, _, _, otelTable, otelTableSet, _, _, _ := parseArgs([]string{})
-	if otelTableSet {
-		t.Error("expected otelTableSet=false when --otel-table is not passed")
-	}
-	if otelTable != "main.codex_telemetry.codex_otel_metrics" {
-		t.Errorf("expected default otelTable, got %q", otelTable)
-	}
-}
 
 func TestParseArgs_UnknownFlagPassthrough(t *testing.T) {
-	_, _, _, _, _, _, _, _, _, codexArgs := parseArgs([]string{"--unknown"})
+	_, _, _, _, _, _, _, _, _, _, _, codexArgs := parseArgs([]string{"--unknown"})
 	if len(codexArgs) != 1 || codexArgs[0] != "--unknown" {
 		t.Errorf("expected codexArgs=[\"--unknown\"], got %v", codexArgs)
 	}
 }
 
 func TestParseArgs_EmptyArgs(t *testing.T) {
-	verbose, version, showHelp, printEnv, noOtel, _, _, upstream, logFile, codexArgs := parseArgs([]string{})
-	if verbose || version || showHelp || printEnv || noOtel {
+	verbose, version, showHelp, printEnv, noOtel, _, _, upstream, logFile, profile, otel, codexArgs := parseArgs([]string{})
+	if verbose || version || showHelp || printEnv || noOtel || otel {
 		t.Error("expected all bool flags false for empty args")
 	}
 	if upstream != "" {
@@ -143,13 +135,16 @@ func TestParseArgs_EmptyArgs(t *testing.T) {
 	if logFile != "" {
 		t.Errorf("expected empty logFile, got %q", logFile)
 	}
+	if profile != "" {
+		t.Errorf("expected empty profile, got %q", profile)
+	}
 	if len(codexArgs) != 0 {
 		t.Errorf("expected no codexArgs, got %v", codexArgs)
 	}
 }
 
 func TestParseArgs_Mixed(t *testing.T) {
-	verbose, _, showHelp, _, _, _, _, upstream, _, _ := parseArgs([]string{"--verbose", "--upstream", "https://gw.example.com", "--help"})
+	verbose, _, showHelp, _, _, _, _, upstream, _, _, _, _ := parseArgs([]string{"--verbose", "--upstream", "https://gw.example.com", "--help"})
 	if !showHelp {
 		t.Error("expected showHelp=true")
 	}
@@ -162,7 +157,7 @@ func TestParseArgs_Mixed(t *testing.T) {
 }
 
 func TestParseArgs_Separator(t *testing.T) {
-	verbose, _, _, _, _, _, _, _, _, codexArgs := parseArgs([]string{"--verbose", "--", "--unknown", "arg1"})
+	verbose, _, _, _, _, _, _, _, _, _, _, codexArgs := parseArgs([]string{"--verbose", "--", "--unknown", "arg1"})
 	if !verbose {
 		t.Error("expected verbose=true before separator")
 	}
@@ -172,7 +167,7 @@ func TestParseArgs_Separator(t *testing.T) {
 }
 
 func TestParseArgs_PassthroughArgs(t *testing.T) {
-	_, _, _, _, _, _, _, _, _, codexArgs := parseArgs([]string{"prompt text", "--model", "gpt-4"})
+	_, _, _, _, _, _, _, _, _, _, _, codexArgs := parseArgs([]string{"prompt text", "--model", "gpt-4"})
 	if len(codexArgs) != 3 {
 		t.Errorf("expected 3 codexArgs, got %d: %v", len(codexArgs), codexArgs)
 	}
@@ -188,6 +183,8 @@ func TestParseArgs_Table(t *testing.T) {
 		noOtel    bool
 		upstream  string
 		logFile   string
+		profile   string
+		otel      bool
 		codexLen  int
 	}
 
@@ -261,11 +258,31 @@ func TestParseArgs_Table(t *testing.T) {
 			args: []string{"--verbose", "--upstream", "https://gw.example.com", "--help"},
 			want: result{showHelp: true, verbose: true, upstream: "https://gw.example.com"},
 		},
+		{
+			name: "--profile sets profile",
+			args: []string{"--profile", "aidev"},
+			want: result{profile: "aidev"},
+		},
+		{
+			name: "--profile=value sets profile",
+			args: []string{"--profile=aidev"},
+			want: result{profile: "aidev"},
+		},
+		{
+			name: "--otel sets otel",
+			args: []string{"--otel"},
+			want: result{otel: true},
+		},
+		{
+			name: "--otel and --no-otel both parsed",
+			args: []string{"--otel", "--no-otel"},
+			want: result{otel: true, noOtel: true},
+		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			verbose, version, showHelp, printEnv, noOtel, _, _, upstream, logFile, codexArgs := parseArgs(tc.args)
+			verbose, version, showHelp, printEnv, noOtel, _, _, upstream, logFile, profile, otel, codexArgs := parseArgs(tc.args)
 
 			if verbose != tc.want.verbose {
 				t.Errorf("verbose: got %v, want %v", verbose, tc.want.verbose)
@@ -287,6 +304,12 @@ func TestParseArgs_Table(t *testing.T) {
 			}
 			if logFile != tc.want.logFile {
 				t.Errorf("logFile: got %q, want %q", logFile, tc.want.logFile)
+			}
+			if profile != tc.want.profile {
+				t.Errorf("profile: got %q, want %q", profile, tc.want.profile)
+			}
+			if otel != tc.want.otel {
+				t.Errorf("otel: got %v, want %v", otel, tc.want.otel)
 			}
 			if len(codexArgs) != tc.want.codexLen {
 				t.Errorf("codexArgs length: got %d, want %d (args: %v)", len(codexArgs), tc.want.codexLen, codexArgs)
@@ -332,7 +355,7 @@ func captureStdout(fn func()) string {
 
 func TestHandlePrintEnv_DapiTokenRedacted(t *testing.T) {
 	out := captureStdout(func() {
-		handlePrintEnv("https://dbc.example.com", "https://gw.example.com/openai/v1", "dapi-abc123secret")
+		handlePrintEnv("https://dbc.example.com", "https://gw.example.com/openai/v1", "dapi-abc123secret", "DEFAULT")
 	})
 	if !strings.Contains(out, "dapi-***") {
 		t.Errorf("expected dapi token to appear as 'dapi-***', got:\n%s", out)
@@ -344,17 +367,26 @@ func TestHandlePrintEnv_DapiTokenRedacted(t *testing.T) {
 
 func TestHandlePrintEnv_NonDapiTokenRedacted(t *testing.T) {
 	out := captureStdout(func() {
-		handlePrintEnv("https://dbc.example.com", "https://gw.example.com/openai/v1", "eyJhbGciOiJSUzI1NiJ9")
+		handlePrintEnv("https://dbc.example.com", "https://gw.example.com/openai/v1", "eyJhbGciOiJSUzI1NiJ9", "DEFAULT")
 	})
 	if !strings.Contains(out, "**** (redacted)") {
 		t.Errorf("expected non-dapi token to appear as '**** (redacted)', got:\n%s", out)
 	}
 }
 
+func TestHandlePrintEnv_ContainsProfile(t *testing.T) {
+	out := captureStdout(func() {
+		handlePrintEnv("https://dbc.example.com", "https://gw.example.com/openai/v1", "tok", "aidev")
+	})
+	if !strings.Contains(out, "aidev") {
+		t.Errorf("expected output to contain profile 'aidev', got:\n%s", out)
+	}
+}
+
 func TestHandlePrintEnv_ContainsDatabricksHost(t *testing.T) {
 	host := "https://dbc-abc123.cloud.databricks.com"
 	out := captureStdout(func() {
-		handlePrintEnv(host, "https://gw.example.com/openai/v1", "tok")
+		handlePrintEnv(host, "https://gw.example.com/openai/v1", "tok", "DEFAULT")
 	})
 	if !strings.Contains(out, host) {
 		t.Errorf("expected output to contain DATABRICKS_HOST %q, got:\n%s", host, out)
@@ -364,7 +396,7 @@ func TestHandlePrintEnv_ContainsDatabricksHost(t *testing.T) {
 func TestHandlePrintEnv_ContainsOpenAIBaseURL(t *testing.T) {
 	baseURL := "https://gw.example.com/openai/v1"
 	out := captureStdout(func() {
-		handlePrintEnv("https://dbc.example.com", baseURL, "tok")
+		handlePrintEnv("https://dbc.example.com", baseURL, "tok", "DEFAULT")
 	})
 	if !strings.Contains(out, baseURL) {
 		t.Errorf("expected output to contain OPENAI_BASE_URL %q, got:\n%s", baseURL, out)
@@ -400,11 +432,32 @@ func TestHandleHelp_ContainsCodexCLISeparator(t *testing.T) {
 	}
 }
 
+func TestParseArgs_Profile(t *testing.T) {
+	_, _, _, _, _, _, _, _, _, profile, _, _ := parseArgs([]string{"--profile", "aidev"})
+	if profile != "aidev" {
+		t.Errorf("expected profile=%q, got %q", "aidev", profile)
+	}
+}
+
+func TestParseArgs_ProfileEquals(t *testing.T) {
+	_, _, _, _, _, _, _, _, _, profile, _, _ := parseArgs([]string{"--profile=production"})
+	if profile != "production" {
+		t.Errorf("expected profile=%q, got %q", "production", profile)
+	}
+}
+
+func TestParseArgs_Otel(t *testing.T) {
+	_, _, _, _, _, _, _, _, _, _, otel, _ := parseArgs([]string{"--otel"})
+	if !otel {
+		t.Error("expected otel=true for --otel")
+	}
+}
+
 func TestHandleHelp_AllFlagsPresent(t *testing.T) {
 	out := captureStdout(func() {
 		handleHelp("")
 	})
-	flags := []string{"--upstream", "--verbose", "-v", "--log-file", "--no-otel", "--otel-table", "--version", "--help"}
+	flags := []string{"--profile", "--upstream", "--verbose", "-v", "--log-file", "--otel", "--no-otel", "--otel-logs-table", "--version", "--help"}
 	for _, flag := range flags {
 		if !strings.Contains(out, flag) {
 			t.Errorf("expected help output to contain flag %q, got:\n%s", flag, out)
@@ -420,3 +473,6 @@ func TestHandleHelp_ContainsVersion(t *testing.T) {
 		t.Errorf("expected help output to contain version string, got:\n%s", out)
 	}
 }
+
+
+
