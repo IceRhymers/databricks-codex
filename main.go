@@ -15,7 +15,7 @@ import (
 var Version = "dev"
 
 func main() {
-	verbose, version, showHelp, printEnv, noOtel, otelMetricsTable, otelMetricsTableSet, otelLogsTable, otelLogsTableSet, upstream, logFile, profile, otel, codexArgs := parseArgs(os.Args[1:])
+	verbose, version, showHelp, printEnv, noOtel, otelLogsTable, otelLogsTableSet, upstream, logFile, profile, otel, codexArgs := parseArgs(os.Args[1:])
 
 	if showHelp {
 		handleHelp(upstream)
@@ -93,11 +93,8 @@ func main() {
 	log.Printf("databricks-codex: gateway URL: %s", gatewayURL)
 
 	// --- OTEL tables ---
-	if !otelMetricsTableSet {
-		otelMetricsTable = "main.codex_telemetry.codex_otel_metrics"
-	}
 	if !otelLogsTableSet {
-		otelLogsTable = deriveLogsTable(otelMetricsTable)
+		otelLogsTable = "main.codex_telemetry.codex_otel_logs"
 	}
 	if noOtel {
 		otel = false
@@ -129,7 +126,6 @@ func main() {
 	proxyHandler := NewProxyServer(&ProxyConfig{
 		InferenceUpstream: gatewayURL,
 		OTELUpstream:      otelUpstream,
-		UCMetricsTable:    otelMetricsTable,
 		UCLogsTable:       otelLogsTable,
 		TokenProvider:     tp,
 		Verbose:           verbose,
@@ -161,7 +157,7 @@ func main() {
 	os.Setenv("OPENAI_API_KEY", "databricks-proxy")
 
 	if otel {
-		log.Printf("databricks-codex: OTEL enabled — metrics=%s logs=%s", otelMetricsTable, otelLogsTable)
+		log.Printf("databricks-codex: OTEL enabled — logs=%s", otelLogsTable)
 	}
 
 	log.Printf("databricks-codex: launching codex")
@@ -181,22 +177,18 @@ func main() {
 }
 
 // parseArgs separates databricks-codex flags from codex flags.
-func parseArgs(args []string) (verbose bool, version bool, showHelp bool, printEnv bool, noOtel bool, otelMetricsTable string, otelMetricsTableSet bool, otelLogsTable string, otelLogsTableSet bool, upstream string, logFile string, profile string, otel bool, codexArgs []string) {
-	otelMetricsTable = "main.codex_telemetry.codex_otel_metrics" // default
-
+func parseArgs(args []string) (verbose bool, version bool, showHelp bool, printEnv bool, noOtel bool, otelLogsTable string, otelLogsTableSet bool, upstream string, logFile string, profile string, otel bool, codexArgs []string) {
 	knownFlags := map[string]bool{
-		"--verbose":            true,
-		"--version":            true,
-		"--help":               true,
-		"--print-env":          true,
-		"--no-otel":            true,
-		"--otel":               true,
-		"--otel-table":         true,
-		"--otel-metrics-table": true,
-		"--otel-logs-table":    true,
-		"--upstream":           true,
-		"--log-file":           true,
-		"--profile":            true,
+		"--verbose":         true,
+		"--version":         true,
+		"--help":            true,
+		"--print-env":       true,
+		"--no-otel":         true,
+		"--otel":            true,
+		"--otel-logs-table": true,
+		"--upstream":        true,
+		"--log-file":        true,
+		"--profile":         true,
 	}
 
 	i := 0
@@ -230,15 +222,6 @@ func parseArgs(args []string) (verbose bool, version bool, showHelp bool, printE
 
 			if knownFlags[name] {
 				switch name {
-				case "--otel-table", "--otel-metrics-table":
-					if value != "" {
-						otelMetricsTable = value
-						otelMetricsTableSet = true
-					} else if i+1 < len(args) {
-						i++
-						otelMetricsTable = args[i]
-						otelMetricsTableSet = true
-					}
 				case "--otel-logs-table":
 					if value != "" {
 						otelLogsTable = value
@@ -310,11 +293,9 @@ Databricks-Codex Flags:
   --print-env           Print resolved configuration and exit (token redacted)
   --verbose, -v         Enable debug logging to stderr
   --log-file string     Write debug logs to a file (combinable with --verbose)
-  --otel                        Enable OpenTelemetry telemetry proxying
-  --no-otel                     Disable OpenTelemetry for this session
-  --otel-metrics-table string   Unity Catalog table for OTEL metrics (default: main.codex_telemetry.codex_otel_metrics)
-  --otel-logs-table string      Unity Catalog table for OTEL logs (default: derived from metrics table)
-  --otel-table string           Alias for --otel-metrics-table
+  --otel                    Enable OpenTelemetry log export
+  --no-otel                 Disable OpenTelemetry for this session
+  --otel-logs-table string  Unity Catalog table for OTEL logs (default: main.codex_telemetry.codex_otel_logs)
   --version             Print version and exit
   --help, -h            Show this help message
 
@@ -363,12 +344,3 @@ func handlePrintEnv(databricksHost, openaiBaseURL, token, profile string) {
 `, profile, databricksHost, openaiBaseURL, redacted, codexPath)
 }
 
-// deriveLogsTable derives the OTEL logs table name from the metrics table name.
-// If the metrics table ends with "_otel_metrics", it replaces that suffix with
-// "_otel_logs"; otherwise it appends "_otel_logs".
-func deriveLogsTable(metricsTable string) string {
-	if strings.HasSuffix(metricsTable, "_otel_metrics") {
-		return strings.TrimSuffix(metricsTable, "_otel_metrics") + "_otel_logs"
-	}
-	return metricsTable + "_otel_logs"
-}

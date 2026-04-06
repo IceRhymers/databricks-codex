@@ -23,7 +23,6 @@ type TokenSource interface {
 type Config struct {
 	InferenceUpstream string
 	OTELUpstream      string
-	UCMetricsTable    string
 	UCLogsTable       string
 	TokenSource       TokenSource
 	Verbose           bool
@@ -278,12 +277,7 @@ func NewServer(config *Config) http.Handler {
 			req.Header.Set("Authorization", "Bearer "+token)
 			req.Header.Set("x-api-key", token)
 
-			// Pick the correct UC table based on whether this is a logs or metrics request.
-			ucTable := config.UCMetricsTable
-			if strings.Contains(req.URL.Path, "/v1/logs") {
-				ucTable = config.UCLogsTable
-			}
-			req.Header.Set("X-Databricks-UC-Table-Name", ucTable)
+			req.Header.Set("X-Databricks-UC-Table-Name", config.UCLogsTable)
 
 			// Strip the /otel prefix and prepend the upstream base path.
 			stripped := strings.TrimPrefix(req.URL.Path, "/otel")

@@ -1,0 +1,26 @@
+2026/04/05 23:27:19 databricks-codex: using saved profile: DEFAULT
+2026/04/05 23:27:19 databricks-codex: using profile: DEFAULT
+2026/04/05 23:27:19 databricks-codex: discovered host: https://dbc-a601fd91-796b.cloud.databricks.com
+2026/04/05 23:27:19 resolved workspace ID 978210998632729, using gateway URL: https://978210998632729.ai-gateway.cloud.databricks.com/openai/v1
+2026/04/05 23:27:19 databricks-codex: gateway URL: https://978210998632729.ai-gateway.cloud.databricks.com/openai/v1
+2026/04/05 23:27:19 databricks-codex: OTEL enabled, upstream: https://dbc-a601fd91-796b.cloud.databricks.com/api/2.0/otel
+2026/04/05 23:27:19 databricks-codex: local proxy http://127.0.0.1:50868 -> https://978210998632729.ai-gateway.cloud.databricks.com/openai/v1
+2026/04/05 23:27:19 databricks-codex: patched /Users/tannerwendland/.codex/config.toml (proxy: http://127.0.0.1:50868)
+2026/04/05 23:27:19 databricks-codex: OTEL enabled — metrics=main.default.claude_otel_metrics logs=main.default.claude_otel_logs
+2026/04/05 23:27:19 databricks-codex: launching codex
+2026/04/05 23:27:20 databricks-codex: otel → POST dbc-a601fd91-796b.cloud.databricks.com/api/2.0/otel/v1/logs
+2026/04/05 23:27:21 databricks-codex: otel ← 200 (0 bytes)
+2026/04/05 23:27:24 databricks-codex: inference → POST 978210998632729.ai-gateway.cloud.databricks.com/openai/v1/responses
+2026/04/05 23:27:24 databricks-codex: otel → POST dbc-a601fd91-796b.cloud.databricks.com/api/2.0/otel/v1/logs
+2026/04/05 23:27:25 databricks-codex: otel ← 200 (0 bytes)
+2026/04/05 23:27:25 databricks-codex: otel → POST dbc-a601fd91-796b.cloud.databricks.com/api/2.0/otel/v1/logs
+2026/04/05 23:27:26 databricks-codex: proxy panic recovered: net/http: abort Handler
+2026/04/05 23:27:26 http: superfluous response.WriteHeader call from github.com/IceRhymers/databricks-codex/pkg/proxy.NewServer.RecoveryHandler.func7.1 (proxy.go:38)
+2026/04/05 23:27:26 databricks-codex: otel ← 200 (0 bytes)
+2026/04/05 23:27:26 databricks-codex: otel → POST dbc-a601fd91-796b.cloud.databricks.com/api/2.0/otel/v1/logs
+2026/04/05 23:27:27 databricks-codex: otel ← 200 (0 bytes)
+2026/04/05 23:27:28 databricks-codex: otel → POST dbc-a601fd91-796b.cloud.databricks.com/api/2.0/otel/v1/logs
+2026/04/05 23:27:28 databricks-codex: otel upstream error 400: �Invalid proto format: While parsing a protocol message, the input ended unexpectedly in the middle of a field.  This could mean either that the input has been truncated or that an embedded message misreported its own length.
+2026/04/05 23:27:29 databricks-codex: otel → POST dbc-a601fd91-796b.cloud.databricks.com/api/2.0/otel/v1/logs
+2026/04/05 23:27:29 databricks-codex: otel ← 200 (0 bytes)
+2026/04/05 23:27:29 databricks-codex: config.toml restored
