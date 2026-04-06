@@ -295,39 +295,6 @@ func TestParseArgs_Table(t *testing.T) {
 	}
 }
 
-// --- setEnv tests ---
-
-func TestSetEnv_NewKey(t *testing.T) {
-	env := []string{"PATH=/usr/bin", "HOME=/root"}
-	env = setEnv(env, "OPENAI_BASE_URL", "https://example.com")
-	found := false
-	for _, e := range env {
-		if e == "OPENAI_BASE_URL=https://example.com" {
-			found = true
-		}
-	}
-	if !found {
-		t.Errorf("expected OPENAI_BASE_URL to be appended, got %v", env)
-	}
-}
-
-func TestSetEnv_ReplaceExisting(t *testing.T) {
-	env := []string{"PATH=/usr/bin", "OPENAI_BASE_URL=old", "HOME=/root"}
-	env = setEnv(env, "OPENAI_BASE_URL", "new")
-	count := 0
-	for _, e := range env {
-		if strings.HasPrefix(e, "OPENAI_BASE_URL=") {
-			count++
-			if e != "OPENAI_BASE_URL=new" {
-				t.Errorf("expected OPENAI_BASE_URL=new, got %s", e)
-			}
-		}
-	}
-	if count != 1 {
-		t.Errorf("expected exactly 1 OPENAI_BASE_URL entry, got %d", count)
-	}
-}
-
 // --- default log discard test ---
 
 func TestDefaultLogDiscard(t *testing.T) {

@@ -9,7 +9,6 @@ import (
 	"os"
 	"os/exec"
 	"strings"
-	"syscall"
 )
 
 // Version is set at build time via -ldflags.
@@ -82,38 +81,42 @@ func main() {
 		os.Exit(0)
 	}
 
-	// --- Resolve codex binary ---
-	codexBin := "codex"
-	if p, err := exec.LookPath("codex"); err == nil {
-		codexBin = p
-	} else {
+	// Verify codex is on PATH before starting proxy.
+	if _, err := exec.LookPath("codex"); err != nil {
 		log.Fatalf("databricks-codex: codex binary not found on PATH — install from https://openai.com/codex")
 	}
 
-	// --- Build child environment: inherit all env vars + inject OPENAI_* ---
-	env := os.Environ()
-	env = setEnv(env, "OPENAI_BASE_URL", gatewayURL)
-	env = setEnv(env, "OPENAI_API_KEY", initialToken)
-
-	log.Printf("databricks-codex: launching %s with OPENAI_BASE_URL=%s", codexBin, gatewayURL)
-
-	// --- Exec codex (replaces this process) ---
-	args := append([]string{codexBin}, codexArgs...)
-	if err := syscall.Exec(codexBin, args, env); err != nil {
-		log.Fatalf("databricks-codex: exec failed: %v", err)
+	// --- Start local proxy so the token stays fresh for the entire session ---
+	// The proxy uses tokencache to refresh the Databricks OAuth token automatically
+	// (5-min buffer before expiry). Codex talks to the proxy; the proxy injects
+	// a fresh Bearer token on every outbound request to the AI Gateway.
+	proxyHandler := NewProxyServer(&ProxyConfig{
+		InferenceUpstream: gatewayURL,
+		UCMetricsTable:    otelMetricsTable,
+		TokenProvider:     tp,
+		Verbose:           verbose,
+	})
+	listener, err := StartProxy(proxyHandler)
+	if err != nil {
+		log.Fatalf("databricks-codex: failed to start proxy: %v", err)
 	}
-}
+	defer listener.Close()
+	proxyAddr := "http://" + listener.Addr().String()
+	log.Printf("databricks-codex: local proxy %s -> %s", proxyAddr, gatewayURL)
 
-// setEnv sets or replaces an environment variable in a []string slice.
-func setEnv(env []string, key, value string) []string {
-	prefix := key + "="
-	for i, e := range env {
-		if strings.HasPrefix(e, prefix) {
-			env[i] = prefix + value
-			return env
-		}
+	// Point Codex at the local proxy. OPENAI_API_KEY is a non-empty placeholder;
+	// the proxy overwrites the Authorization header with a live token per request.
+	os.Setenv("OPENAI_BASE_URL", proxyAddr)
+	os.Setenv("OPENAI_API_KEY", "databricks-proxy")
+
+	log.Printf("databricks-codex: launching codex")
+
+	// --- Run codex as a child process (parent stays alive to serve the proxy) ---
+	exitCode, err := RunCodex(context.Background(), codexArgs)
+	if err != nil {
+		log.Fatalf("databricks-codex: codex failed: %v", err)
 	}
-	return append(env, prefix+value)
+	os.Exit(exitCode)
 }
 
 // parseArgs separates databricks-codex flags from codex flags.
