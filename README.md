@@ -1,5 +1,8 @@
 # databricks-codex
 
+> **Disclaimer:** This is an unofficial, community-built workaround to enable Databricks OAuth SSO authentication with this AI coding tool. It is not supported, endorsed, or recognized by Databricks. Use at your own risk.
+
+
 Transparent wrapper for the OpenAI Codex CLI that runs a local proxy backed by Databricks OAuth — so you never manually paste or refresh a token again.
 
 ## The Problem
