@@ -6,6 +6,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -622,5 +623,97 @@ func TestHandlePrintEnv_ContainsOtelLogsTable(t *testing.T) {
 	}
 	if !strings.Contains(out, "OTEL Logs Table:") {
 		t.Errorf("expected output to contain 'OTEL Logs Table:' label, got:\n%s", out)
+	}
+}
+
+// --- resolveProfile tests ---
+
+func TestResolveProfile_FlagWinsOverStateFile(t *testing.T) {
+	got := resolveProfile("from-flag", "from-state")
+	if got != "from-flag" {
+		t.Errorf("expected flag value %q, got %q", "from-flag", got)
+	}
+}
+
+func TestResolveProfile_StateFileWinsOverEnvVar(t *testing.T) {
+	// Set the env var that previously would have won over state file.
+	t.Setenv("DATABRICKS_CONFIG_PROFILE", "from-env")
+
+	// resolveProfile should use saved state, ignoring the env var entirely.
+	got := resolveProfile("", "from-state")
+	if got != "from-state" {
+		t.Errorf("expected state file value %q, got %q — env var should be ignored", "from-state", got)
+	}
+}
+
+func TestResolveProfile_FallsBackToDefault(t *testing.T) {
+	got := resolveProfile("", "")
+	if got != "DEFAULT" {
+		t.Errorf("expected %q, got %q", "DEFAULT", got)
+	}
+}
+
+func TestResolveProfile_FlagWinsOverStateFile_Integration(t *testing.T) {
+	// Wire up a temp state file with a saved profile.
+	dir := t.TempDir()
+	orig := statePath
+	statePath = func() string { return filepath.Join(dir, "state.json") }
+	defer func() { statePath = orig }()
+
+	saveState(persistentState{Profile: "saved-profile"})
+
+	// Simulate --profile flag being passed.
+	got := resolveProfile("flag-profile", loadState().Profile)
+	if got != "flag-profile" {
+		t.Errorf("expected flag profile %q, got %q", "flag-profile", got)
+	}
+}
+
+func TestResolveProfile_StateFileUsedWhenNoFlag(t *testing.T) {
+	dir := t.TempDir()
+	orig := statePath
+	statePath = func() string { return filepath.Join(dir, "state.json") }
+	defer func() { statePath = orig }()
+
+	saveState(persistentState{Profile: "saved-profile"})
+
+	got := resolveProfile("", loadState().Profile)
+	if got != "saved-profile" {
+		t.Errorf("expected saved profile %q, got %q", "saved-profile", got)
+	}
+}
+
+func TestResolveProfile_DefaultWhenNoStateFile(t *testing.T) {
+	dir := t.TempDir()
+	orig := statePath
+	statePath = func() string { return filepath.Join(dir, "nonexistent.json") }
+	defer func() { statePath = orig }()
+
+	got := resolveProfile("", loadState().Profile)
+	if got != "DEFAULT" {
+		t.Errorf("expected %q, got %q", "DEFAULT", got)
+	}
+}
+
+func TestResolveProfile_Table(t *testing.T) {
+	tests := []struct {
+		name       string
+		flagValue  string
+		savedValue string
+		want       string
+	}{
+		{"flag wins over saved", "flag-profile", "saved-profile", "flag-profile"},
+		{"saved wins over default", "", "saved-profile", "saved-profile"},
+		{"default when both empty", "", "", "DEFAULT"},
+		{"flag wins over empty saved", "flag-profile", "", "flag-profile"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := resolveProfile(tc.flagValue, tc.savedValue)
+			if got != tc.want {
+				t.Errorf("resolveProfile(%q, %q) = %q, want %q",
+					tc.flagValue, tc.savedValue, got, tc.want)
+			}
+		})
 	}
 }
