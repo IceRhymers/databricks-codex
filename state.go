@@ -13,6 +13,23 @@ type persistentState struct {
 	Profile       string `json:"profile,omitempty"`
 	OtelLogsTable string `json:"otel_logs_table,omitempty"`
 	Model         string `json:"model,omitempty"`
+	Port          int    `json:"port,omitempty"`
+}
+
+const defaultPort = 49154
+
+// resolvePort returns the port to use, following the resolution chain:
+// 1. --port flag (portFlag > 0)
+// 2. Saved state value (non-zero)
+// 3. Default 49154
+func resolvePort(portFlag int, state persistentState) int {
+	if portFlag > 0 {
+		return portFlag
+	}
+	if state.Port > 0 {
+		return state.Port
+	}
+	return defaultPort
 }
 
 // statePath returns the path to the persistent state file.

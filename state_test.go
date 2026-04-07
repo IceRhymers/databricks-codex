@@ -160,3 +160,41 @@ func TestSaveState_ModelPreservesOtherFields(t *testing.T) {
 		t.Errorf("got Model %q, want %q", s.Model, "custom-model")
 	}
 }
+
+func TestResolvePort(t *testing.T) {
+	tests := []struct {
+		name     string
+		portFlag int
+		state    persistentState
+		want     int
+	}{
+		{"flag wins", 9999, persistentState{Port: 8080}, 9999},
+		{"state wins over default", 0, persistentState{Port: 8080}, 8080},
+		{"default when no flag and no state", 0, persistentState{}, defaultPort},
+		{"flag wins over default", 5555, persistentState{}, 5555},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := resolvePort(tc.portFlag, tc.state)
+			if got != tc.want {
+				t.Errorf("resolvePort(%d, %+v) = %d, want %d", tc.portFlag, tc.state, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestSaveAndLoadState_Port(t *testing.T) {
+	dir := t.TempDir()
+	orig := statePath
+	statePath = func() string { return filepath.Join(dir, "state.json") }
+	defer func() { statePath = orig }()
+
+	if err := saveState(persistentState{Port: 49154}); err != nil {
+		t.Fatalf("saveState: %v", err)
+	}
+
+	s := loadState()
+	if s.Port != 49154 {
+		t.Errorf("got Port %d, want %d", s.Port, 49154)
+	}
+}

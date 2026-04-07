@@ -7,18 +7,24 @@ import (
 	"io"
 	"log"
 	"os"
+	"net"
+	"net/http"
 	"os/exec"
+	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/IceRhymers/databricks-claude/pkg/authcheck"
+	"github.com/IceRhymers/databricks-claude/pkg/portbind"
 	"github.com/IceRhymers/databricks-claude/pkg/proxy"
+	"github.com/IceRhymers/databricks-claude/pkg/refcount"
 )
 
 // Version is set at build time via -ldflags.
 var Version = "dev"
 
 func main() {
-	verbose, version, showHelp, printEnv, noOtel, otelLogsTable, otelLogsTableSet, upstream, logFile, profile, otel, proxyAPIKey, tlsCert, tlsKey, model, modelSet, codexArgs := parseArgs(os.Args[1:])
+	verbose, version, showHelp, printEnv, noOtel, otelLogsTable, otelLogsTableSet, upstream, logFile, profile, otel, proxyAPIKey, tlsCert, tlsKey, model, modelSet, portFlag, codexArgs := parseArgs(os.Args[1:])
 
 	if showHelp {
 		handleHelp(upstream)
@@ -105,6 +111,19 @@ func main() {
 		log.Fatalf("databricks-codex: auth failed: %v", err)
 	}
 
+	// --- Load state and resolve port ---
+	state := loadState()
+	port := resolvePort(portFlag, state)
+	if portFlag > 0 {
+		state.Port = port
+		if err := saveState(state); err != nil {
+			log.Printf("databricks-codex: failed to save port: %v", err)
+		} else {
+			log.Printf("databricks-codex: saved port %d for future sessions", port)
+		}
+	}
+	log.Printf("databricks-codex: using port: %d", port)
+
 	// --- TLS validation ---
 	if err := proxy.ValidateTLSConfig(tlsCert, tlsKey); err != nil {
 		log.Fatalf("databricks-codex: %v", err)
@@ -173,45 +192,71 @@ func main() {
 		log.Printf("databricks-codex: OTEL enabled, upstream: %s", otelUpstream)
 	}
 
-	// --- Start local proxy so the token stays fresh for the entire session ---
-	// The proxy uses tokencache to refresh the Databricks OAuth token automatically
-	// (5-min buffer before expiry). Codex talks to the proxy via config.toml;
-	// the proxy injects a fresh Bearer token on every outbound request/WebSocket
-	// connection to the AI Gateway.
-	proxyHandler := NewProxyServer(&ProxyConfig{
-		InferenceUpstream: gatewayURL,
-		OTELUpstream:      otelUpstream,
-		UCLogsTable:       otelLogsTable,
-		TokenProvider:     tp,
-		Verbose:           verbose,
-		APIKey:            proxyAPIKey,
-		TLSCertFile:       tlsCert,
-		TLSKeyFile:        tlsKey,
-	})
-	listener, err := StartProxy(proxyHandler, tlsCert, tlsKey)
+	// --- Bind proxy port ---
+	ln, isOwner, err := portbind.Bind("databricks-codex", port)
 	if err != nil {
-		log.Fatalf("databricks-codex: failed to start proxy: %v", err)
+		log.Fatalf("databricks-codex: %v", err)
 	}
-	defer listener.Close()
-	proxyScheme := "http://"
-	if tlsCert != "" && tlsKey != "" {
-		proxyScheme = "https://"
-	}
-	proxyAddr := proxyScheme + listener.Addr().String()
-	log.Printf("databricks-codex: local proxy %s -> %s", proxyAddr, gatewayURL)
 
-	// --- Patch config.toml to point Codex at the local proxy ---
-	// This is the Codex equivalent of databricks-claude patching settings.json.
-	// The proxy URL is written as a model_provider in config.toml with
-	// wire_api = "responses" so Codex uses the Responses API via WebSocket.
+	scheme := "http"
+	if tlsCert != "" && tlsKey != "" {
+		scheme = "https"
+		fmt.Fprintln(os.Stderr, "databricks-codex: TLS enabled")
+	}
+	proxyURL := fmt.Sprintf("%s://127.0.0.1:%d", scheme, listenerPort(ln, port))
+
+	// --- Start proxy if we own the port ---
+	if isOwner {
+		proxyCfg := &ProxyConfig{
+			InferenceUpstream: gatewayURL,
+			OTELUpstream:      otelUpstream,
+			UCLogsTable:       otelLogsTable,
+			TokenProvider:     tp,
+			Verbose:           verbose,
+			APIKey:            proxyAPIKey,
+			TLSCertFile:       tlsCert,
+			TLSKeyFile:        tlsKey,
+			ToolName:          "databricks-codex",
+			Version:           Version,
+		}
+		if proxyAPIKey != "" {
+			fmt.Fprintln(os.Stderr, "databricks-codex: proxy API key authentication enabled")
+		}
+		handler := NewProxyServer(proxyCfg)
+		go func() {
+			srv := &http.Server{Handler: handler}
+			if tlsCert != "" && tlsKey != "" {
+				if err := srv.ServeTLS(ln, tlsCert, tlsKey); err != nil && err != http.ErrServerClosed {
+					log.Printf("databricks-codex: proxy serve error: %v", err)
+				}
+			} else {
+				if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {
+					log.Printf("databricks-codex: proxy serve error: %v", err)
+				}
+			}
+		}()
+	}
+	log.Printf("databricks-codex: proxy on %s (owner=%v)", proxyURL, isOwner)
+
+	// --- Reference counting ---
+	refcountPath := filepath.Join(os.TempDir(), fmt.Sprintf(".databricks-codex-sessions-%d", port))
+	refcount.Acquire(refcountPath)
+	defer func() {
+		n, _ := refcount.Release(refcountPath)
+		if n == 0 && isOwner {
+			ln.Close()
+		}
+	}()
+
+	// --- Write config once (idempotent) ---
 	otelConfigEndpoint := ""
 	if otel {
-		otelConfigEndpoint = proxyAddr + "/otel/v1/logs"
+		otelConfigEndpoint = proxyURL + "/otel/v1/logs"
 	}
 
 	cm := NewConfigManager()
-	if err := cm.Setup(proxyAddr, model, modelExplicit, otelConfigEndpoint); err != nil {
-		log.Fatalf("databricks-codex: failed to patch config.toml: %v", err)
+	if err := cm.EnsureConfig(proxyURL, model, modelExplicit, otelConfigEndpoint); err != nil {
+		log.Fatalf("databricks-codex: failed to write config.toml: %v", err)
 	}
 
 	// Set OPENAI_API_KEY as a placeholder — the proxy overwrites the
@@ -227,19 +272,26 @@ func main() {
 	// --- Run codex as a child process (parent stays alive to serve the proxy) ---
 	exitCode, err := RunCodex(context.Background(), codexArgs)
 
-	// Explicitly restore config.toml before exiting. This is NOT deferred
-	// because os.Exit() skips deferred functions — we must restore before
-	// exit to avoid leaving config.toml pointing at a dead proxy.
-	cm.Restore()
-
 	if err != nil {
-		log.Fatalf("databricks-codex: codex failed: %v", err)
+		log.Printf("databricks-codex: codex error: %v", err)
 	}
 	os.Exit(exitCode)
 }
 
+// listenerPort extracts the port from a net.Listener, falling back to the
+// configured port if the listener is nil (e.g., non-owner case).
+func listenerPort(ln net.Listener, fallback int) int {
+	if ln == nil {
+		return fallback
+	}
+	if addr, ok := ln.Addr().(*net.TCPAddr); ok {
+		return addr.Port
+	}
+	return fallback
+}
+
 // parseArgs separates databricks-codex flags from codex flags.
-func parseArgs(args []string) (verbose bool, version bool, showHelp bool, printEnv bool, noOtel bool, otelLogsTable string, otelLogsTableSet bool, upstream string, logFile string, profile string, otel bool, proxyAPIKey string, tlsCert string, tlsKey string, model string, modelSet bool, codexArgs []string) {
+func parseArgs(args []string) (verbose bool, version bool, showHelp bool, printEnv bool, noOtel bool, otelLogsTable string, otelLogsTableSet bool, upstream string, logFile string, profile string, otel bool, proxyAPIKey string, tlsCert string, tlsKey string, model string, modelSet bool, portFlag int, codexArgs []string) {
 	knownFlags := map[string]bool{
 		"--verbose":         true,
 		"--version":         true,
@@ -255,6 +307,7 @@ func parseArgs(args []string) (verbose bool, version bool, showHelp bool, printE
 		"--tls-cert":        true,
 		"--tls-key":         true,
 		"--model":           true,
+		"--port":            true,
 	}
 
 	i := 0
@@ -360,6 +413,13 @@ func parseArgs(args []string) (verbose bool, version bool, showHelp bool, printE
 					otel = true
 				case "--no-otel":
 					noOtel = true
+				case "--port":
+					if value != "" {
+						portFlag, _ = strconv.Atoi(value)
+					} else if i+1 < len(args) {
+						i++
+						portFlag, _ = strconv.Atoi(args[i])
+					}
 				}
 				i++
 				continue
@@ -396,6 +456,7 @@ Databricks-Codex Flags:
   --proxy-api-key string    Require this API key on all proxy requests (default: disabled)
   --tls-cert string         Path to TLS certificate file (requires --tls-key)
   --tls-key string          Path to TLS private key file (requires --tls-cert)
+  --port int                Fixed proxy port (default: 49154, saved to state)
   --version             Print version and exit
   --help, -h            Show this help message
 
