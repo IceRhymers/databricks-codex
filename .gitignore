@@ -2,3 +2,4 @@ databricks-codex
 dist/
 *.exe
 .omc/debug.log
+.omc/

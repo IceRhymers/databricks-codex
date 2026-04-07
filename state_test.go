@@ -120,3 +120,43 @@ func TestSaveState_OverwritesOtelLogsTable(t *testing.T) {
 		t.Errorf("got OtelLogsTable %q, want %q", s.OtelLogsTable, "second.table")
 	}
 }
+
+func TestSaveAndLoadState_Model(t *testing.T) {
+	dir := t.TempDir()
+	orig := statePath
+	statePath = func() string { return filepath.Join(dir, "state.json") }
+	defer func() { statePath = orig }()
+
+	if err := saveState(persistentState{Model: "databricks-gpt-5-4-mini"}); err != nil {
+		t.Fatalf("saveState: %v", err)
+	}
+
+	s := loadState()
+	if s.Model != "databricks-gpt-5-4-mini" {
+		t.Errorf("got Model %q, want %q", s.Model, "databricks-gpt-5-4-mini")
+	}
+}
+
+func TestSaveState_ModelPreservesOtherFields(t *testing.T) {
+	dir := t.TempDir()
+	orig := statePath
+	statePath = func() string { return filepath.Join(dir, "state.json") }
+	defer func() { statePath = orig }()
+
+	saveState(persistentState{Profile: "aidev", OtelLogsTable: "my.table"})
+
+	s := loadState()
+	s.Model = "custom-model"
+	saveState(s)
+
+	s = loadState()
+	if s.Profile != "aidev" {
+		t.Errorf("got Profile %q, want %q", s.Profile, "aidev")
+	}
+	if s.OtelLogsTable != "my.table" {
+		t.Errorf("got OtelLogsTable %q, want %q", s.OtelLogsTable, "my.table")
+	}
+	if s.Model != "custom-model" {
+		t.Errorf("got Model %q, want %q", s.Model, "custom-model")
+	}
+}
