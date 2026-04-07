@@ -108,7 +108,7 @@ databricks-codex configuration:
   Profile:           DEFAULT
   DATABRICKS_HOST:   https://adb-1234567890123456.7.azuredatabricks.net
   OPENAI_BASE_URL:   https://1234567890123456.ai-gateway.cloud.databricks.com/openai/v1
-  OPENAI_API_KEY:    dapi-***
+  Auth Token:        dapi-***
   OpenTelemetry Logs Table:   main.codex_telemetry.codex_otel_logs
   Codex binary:      /usr/local/bin/codex
 ```
@@ -116,14 +116,14 @@ databricks-codex configuration:
 Notes:
 
 - `OPENAI_BASE_URL` is the resolved upstream Databricks endpoint, not the localhost proxy address
-- `OPENAI_API_KEY` is always redacted in this output
+- `Auth Token` is always redacted in this output
 - `Codex binary` shows `(not found)` if `codex` is not on your `PATH`
 
 If the profile, host, or URL looks wrong, check your Databricks CLI setup with `databricks auth env` and `databricks auth token`.
 
 ## Proxy behavior
 
-`databricks-codex` does not rely solely on exporting `OPENAI_BASE_URL` and `OPENAI_API_KEY` into the shell environment. Instead, it binds a fixed local proxy on `127.0.0.1:49154` and writes `~/.codex/config.toml` once to point Codex at that proxy.
+`databricks-codex` does not rely on exporting environment variables. Instead, it binds a fixed local proxy on `127.0.0.1:49154` and writes `~/.codex/config.toml` once to point Codex at that proxy (including a placeholder `api_key` — the proxy injects the real Databricks token per-request).
 
 This lets the wrapper:
 

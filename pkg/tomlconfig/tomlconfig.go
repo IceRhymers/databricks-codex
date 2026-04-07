@@ -168,7 +168,7 @@ func (m *Manager) buildProviderSection(cfg PatchConfig) string {
 	var b strings.Builder
 	b.WriteString("name = \"Databricks Proxy\"\n")
 	b.WriteString(fmt.Sprintf("base_url = %q\n", cfg.ProxyURL))
-	b.WriteString("env_key = \"OPENAI_API_KEY\"\n")
+	b.WriteString("api_key = \"databricks-proxy\"\n")
 	b.WriteString("wire_api = \"responses\"\n")
 	return b.String()
 }

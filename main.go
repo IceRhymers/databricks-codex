@@ -262,10 +262,6 @@ func main() {
 		return
 	}
 
-	// Set OPENAI_API_KEY as a placeholder — the proxy overwrites the
-	// Authorization header with a live Databricks token per request.
-	os.Setenv("OPENAI_API_KEY", "databricks-proxy")
-
 	if otel {
 		log.Printf("databricks-codex: OTEL enabled — logs=%s", otelLogsTable)
 	}
@@ -586,7 +582,7 @@ func handlePrintEnv(databricksHost, openaiBaseURL, token, profile, model, otelLo
   Model:             %s
   DATABRICKS_HOST:   %s
   OPENAI_BASE_URL:   %s
-  OPENAI_API_KEY:    %s
+  Auth Token:        %s
   OTEL Logs Table:   %s
   Codex binary:      %s
 `, profile, model, databricksHost, openaiBaseURL, redacted, otelLogsTable, codexPath)
