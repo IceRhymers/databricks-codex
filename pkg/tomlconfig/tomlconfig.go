@@ -140,12 +140,22 @@ func (m *Manager) buildProfileSection(cfg PatchConfig) string {
 		b.WriteString(fmt.Sprintf("model = %q\n", cfg.Model))
 		m.patchedModelVal = cfg.Model
 	} else if existingModel != "" {
-		// Preserve user's existing model line as-is.
+		// Preserve user's existing model line in the profile section as-is.
 		b.WriteString(existingModel + "\n")
-	} else if cfg.Model != "" {
-		// No existing model, no explicit flag: write the resolved default.
-		b.WriteString(fmt.Sprintf("model = %q\n", cfg.Model))
-		m.patchedModelVal = cfg.Model
+	} else {
+		// No explicit flag, no model in the profile section.
+		// Check root-level model — since we switch the active profile to
+		// databricks-proxy, the root-level model would be ignored by Codex.
+		// Carry it into the profile section so the user's choice is respected.
+		rootModel := m.findRootModel(string(m.original))
+		if rootModel != "" {
+			b.WriteString(fmt.Sprintf("model = %q\n", rootModel))
+			m.patchedModelVal = rootModel
+		} else if cfg.Model != "" {
+			// Fall back to the resolved model (saved state or built-in default).
+			b.WriteString(fmt.Sprintf("model = %q\n", cfg.Model))
+			m.patchedModelVal = cfg.Model
+		}
 	}
 
 	return b.String()
@@ -260,6 +270,27 @@ func (m *Manager) patchSection(content, sectionName, body string) string {
 	newLines = append(newLines, lines[endIdx:]...)
 
 	return strings.Join(newLines, "\n")
+}
+
+// findRootModel returns the value of a root-level "model = ..." line (not inside any section).
+// Returns empty string if not found.
+func (m *Manager) findRootModel(content string) string {
+	if content == "" {
+		return ""
+	}
+	lines := strings.Split(content, "\n")
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if isRootKey(trimmed, "model") && !inAnySection(lines, i) {
+			parts := strings.SplitN(trimmed, "=", 2)
+			if len(parts) == 2 {
+				val := strings.TrimSpace(parts[1])
+				val = strings.Trim(val, `"`)
+				return val
+			}
+		}
+	}
+	return ""
 }
 
 // findModelInSection looks for a "model = ..." line inside a named section.

@@ -313,6 +313,58 @@ func TestRestore_NoOriginalFile(t *testing.T) {
 	}
 }
 
+func TestPatch_RespectsRootLevelModel(t *testing.T) {
+	initial := `model = databricks-gpt-5-3
+
+[projects./Users/me/myproject]
+trust_level = trusted
+`
+	m, configPath := setup(t, initial)
+
+	// No --model flag (ModelExplicit=false), no model in [profiles.databricks-proxy].
+	// Should pick up the root-level model.
+	err := m.Patch(PatchConfig{
+		ProxyURL:      "http://127.0.0.1:9999",
+		Model:         "databricks-gpt-5-4",
+		ModelExplicit: false,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	content := readConfig(t, configPath)
+	if !strings.Contains(content, `model = "databricks-gpt-5-3"`) {
+		t.Errorf("expected root-level model to be carried into profile section, got:\n%s", content)
+	}
+	if strings.Contains(content, `model = "databricks-gpt-5-4"`) {
+		t.Errorf("expected fallback model NOT to be used when root-level model exists, got:\n%s", content)
+	}
+}
+
+func TestPatch_RootLevelModelOverriddenByExplicitFlag(t *testing.T) {
+	initial := `model = databricks-gpt-5-3
+
+[projects./Users/me/myproject]
+trust_level = trusted
+`
+	m, configPath := setup(t, initial)
+
+	// --model flag explicitly set: should override root-level model.
+	err := m.Patch(PatchConfig{
+		ProxyURL:      "http://127.0.0.1:9999",
+		Model:         "databricks-gpt-5-4-mini",
+		ModelExplicit: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	content := readConfig(t, configPath)
+	if !strings.Contains(content, `model = "databricks-gpt-5-4-mini"`) {
+		t.Errorf("expected explicit --model to win over root-level model, got:\n%s", content)
+	}
+}
+
 func TestPatch_WithOTEL(t *testing.T) {
 	m, configPath := setup(t, "")
 
