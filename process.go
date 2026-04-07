@@ -23,9 +23,9 @@ var otelKeys = []string{
 }
 
 // RunCodex starts the codex CLI as a child process with the supplied arguments
-// and waits for it to exit. Environment variables (OPENAI_BASE_URL,
-// OPENAI_API_KEY, OTEL vars) are expected to be set on os.Environ by main.go
-// before calling this function.
+// and waits for it to exit. OTEL environment variables are expected to be set
+// on os.Environ by main.go before calling this function. The API key and base
+// URL are configured via config.toml (not environment variables).
 func RunCodex(ctx context.Context, args []string) (int, error) {
 	return childproc.Run(ctx, childproc.Config{
 		BinaryName: "codex",

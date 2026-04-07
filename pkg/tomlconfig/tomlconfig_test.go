@@ -107,7 +107,7 @@ model = "custom-user-model"
 [model_providers.databricks-proxy]
 name = "Databricks Proxy"
 base_url = "http://old-proxy:1234"
-env_key = "OPENAI_API_KEY"
+api_key = "databricks-proxy"
 wire_api = "responses"
 `
 	m, configPath := setup(t, initial)
@@ -138,7 +138,7 @@ model = "custom-user-model"
 [model_providers.databricks-proxy]
 name = "Databricks Proxy"
 base_url = "http://old-proxy:1234"
-env_key = "OPENAI_API_KEY"
+api_key = "databricks-proxy"
 wire_api = "responses"
 `
 	m, configPath := setup(t, initial)
@@ -213,7 +213,7 @@ model = "original-model"
 [model_providers.databricks-proxy]
 name = "Databricks Proxy"
 base_url = "http://old-proxy:1234"
-env_key = "OPENAI_API_KEY"
+api_key = "databricks-proxy"
 wire_api = "responses"
 
 [projects.myapp]
