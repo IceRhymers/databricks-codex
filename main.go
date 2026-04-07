@@ -3,16 +3,18 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"fmt"
 	"io"
 	"log"
-	"os"
 	"net"
 	"net/http"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/IceRhymers/databricks-claude/pkg/authcheck"
 	"github.com/IceRhymers/databricks-claude/pkg/portbind"
@@ -185,7 +187,7 @@ func main() {
 	}
 
 	// --- Bind proxy port ---
-	ln, isOwner, err := portbind.Bind("databricks-codex", port)
+	listener, isOwner, err := portbind.Bind("databricks-codex", port)
 	if err != nil {
 		log.Fatalf("databricks-codex: %v", err)
 	}
@@ -195,50 +197,45 @@ func main() {
 		scheme = "https"
 		fmt.Fprintln(os.Stderr, "databricks-codex: TLS enabled")
 	}
-	proxyURL := fmt.Sprintf("%s://127.0.0.1:%d", scheme, listenerPort(ln, port))
+	proxyURL := fmt.Sprintf("%s://127.0.0.1:%d", scheme, listenerPort(listener, port))
+
+	// --- Proxy handler (needed by owner and recovery goroutine) ---
+	if proxyAPIKey != "" {
+		fmt.Fprintln(os.Stderr, "databricks-codex: proxy API key authentication enabled")
+	}
+	proxyHandler := NewProxyServer(&ProxyConfig{
+		InferenceUpstream: gatewayURL,
+		OTELUpstream:      otelUpstream,
+		UCLogsTable:       otelLogsTable,
+		TokenProvider:     tp,
+		Verbose:           verbose,
+		APIKey:            proxyAPIKey,
+		TLSCertFile:       tlsCert,
+		TLSKeyFile:        tlsKey,
+		ToolName:          "databricks-codex",
+		Version:           Version,
+	})
 
 	// --- Start proxy if we own the port ---
 	if isOwner {
-		proxyCfg := &ProxyConfig{
-			InferenceUpstream: gatewayURL,
-			OTELUpstream:      otelUpstream,
-			UCLogsTable:       otelLogsTable,
-			TokenProvider:     tp,
-			Verbose:           verbose,
-			APIKey:            proxyAPIKey,
-			TLSCertFile:       tlsCert,
-			TLSKeyFile:        tlsKey,
-			ToolName:          "databricks-codex",
-			Version:           Version,
+		servedLn, err := proxy.Serve(listener, proxyHandler, tlsCert, tlsKey)
+		if err != nil {
+			log.Fatalf("databricks-codex: failed to start proxy: %v", err)
 		}
-		if proxyAPIKey != "" {
-			fmt.Fprintln(os.Stderr, "databricks-codex: proxy API key authentication enabled")
-		}
-		handler := NewProxyServer(proxyCfg)
-		go func() {
-			srv := &http.Server{Handler: handler}
-			if tlsCert != "" && tlsKey != "" {
-				if err := srv.ServeTLS(ln, tlsCert, tlsKey); err != nil && err != http.ErrServerClosed {
-					log.Printf("databricks-codex: proxy serve error: %v", err)
-				}
-			} else {
-				if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {
-					log.Printf("databricks-codex: proxy serve error: %v", err)
-				}
-			}
-		}()
+		listener = servedLn
+		log.Printf("databricks-codex: proxy owner on :%d", port)
+	} else {
+		log.Printf("databricks-codex: joining existing proxy on :%d", port)
+		// Watch for owner death and take over the proxy if needed.
+		go watchProxy(port, proxyHandler, tlsCert, tlsKey)
 	}
 	log.Printf("databricks-codex: proxy on %s (owner=%v)", proxyURL, isOwner)
 
 	// --- Reference counting ---
 	refcountPath := filepath.Join(os.TempDir(), fmt.Sprintf(".databricks-codex-sessions-%d", port))
-	refcount.Acquire(refcountPath)
-	defer func() {
-		n, _ := refcount.Release(refcountPath)
-		if n == 0 && isOwner {
-			ln.Close()
-		}
-	}()
+	if err := refcount.Acquire(refcountPath); err != nil {
+		log.Printf("databricks-codex: refcount acquire warning: %v", err)
+	}
 
 	// --- Write config once (idempotent) ---
 	otelConfigEndpoint := ""
@@ -262,10 +259,20 @@ func main() {
 	log.Printf("databricks-codex: launching codex")
 
 	// --- Run codex as a child process (parent stays alive to serve the proxy) ---
-	exitCode, err := RunCodex(context.Background(), codexArgs)
+	exitCode, runErr := RunCodex(context.Background(), codexArgs)
 
+	// --- Release refcount; if last session and owner, close listener ---
+	remaining, err := refcount.Release(refcountPath)
 	if err != nil {
-		log.Printf("databricks-codex: codex error: %v", err)
+		log.Printf("databricks-codex: refcount release warning: %v", err)
+	}
+	if remaining == 0 && isOwner {
+		listener.Close()
+		log.Printf("databricks-codex: last session, proxy shut down")
+	}
+
+	if runErr != nil {
+		log.Printf("databricks-codex: codex error: %v", runErr)
 	}
 	os.Exit(exitCode)
 }
@@ -280,6 +287,52 @@ func listenerPort(ln net.Listener, fallback int) int {
 		return addr.Port
 	}
 	return fallback
+}
+
+// proxyHealthy returns true if the proxy on the given port responds to /health.
+func proxyHealthy(port int, scheme string) bool {
+	client := &http.Client{Timeout: 500 * time.Millisecond}
+	if scheme == "https" {
+		client.Transport = &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		}
+	}
+	resp, err := client.Get(fmt.Sprintf("%s://127.0.0.1:%d/health", scheme, port))
+	if err != nil {
+		return false
+	}
+	resp.Body.Close()
+	return resp.StatusCode == http.StatusOK
+}
+
+// watchProxy polls the proxy health endpoint and takes over the port if the
+// owner process dies. Runs as a goroutine for non-owner sessions.
+func watchProxy(port int, handler http.Handler, tlsCert, tlsKey string) {
+	scheme := "http"
+	if tlsCert != "" && tlsKey != "" {
+		scheme = "https"
+	}
+
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		if proxyHealthy(port, scheme) {
+			continue
+		}
+
+		// Proxy is unreachable — try to bind the port and take over.
+		ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+		if err != nil {
+			continue // another session grabbed it first
+		}
+		if _, err := proxy.Serve(ln, handler, tlsCert, tlsKey); err != nil {
+			ln.Close()
+			continue
+		}
+		log.Printf("databricks-codex: proxy owner died, took over on :%d", port)
+		return
+	}
 }
 
 // parseArgs separates databricks-codex flags from codex flags.

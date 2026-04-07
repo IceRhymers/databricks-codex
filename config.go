@@ -61,14 +61,9 @@ func (cm *ConfigManager) EnsureConfig(proxyURL, model string, modelExplicit bool
 		}
 	}
 
-	// Not yet configured — patch config.toml.
-	// Store original for the patch method (it reads m.original).
-	cm.config.RestoreFromBackup() // recover from any previous crash
-
-	if err := cm.config.Backup(); err != nil {
-		return err
-	}
-
+	// Not yet configured — patch config.toml directly.
+	// No backup/restore needed: the fixed-port design means EnsureConfig is
+	// self-healing on next boot (same URL every time).
 	if err := cm.config.Patch(tomlconfig.PatchConfig{
 		ProxyURL:      proxyURL,
 		Model:         model,
@@ -78,7 +73,7 @@ func (cm *ConfigManager) EnsureConfig(proxyURL, model string, modelExplicit bool
 		return err
 	}
 
-	// Remove the backup — we want the config to persist.
+	// Clean up any stale backup from pre-v0.6.0 crash recovery.
 	os.Remove(cm.config.ConfigPath() + ".databricks-codex-backup")
 
 	log.Printf("databricks-codex: wrote config.toml (proxy: %s)", proxyURL)
