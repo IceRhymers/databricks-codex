@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.6.0](https://github.com/IceRhymers/databricks-codex/compare/v0.5.0...v0.6.0) (2026-04-07)
+
+
+### Features
+
+* dispatch Homebrew formula update on release ([25494d1](https://github.com/IceRhymers/databricks-codex/commit/25494d17425f77db32db00fbff232b4f1a772b65))
+* dispatch Homebrew formula update on release ([ae8186e](https://github.com/IceRhymers/databricks-codex/commit/ae8186ee0f71a2345677573cea130ad393944c76))
+
+
+### Bug Fixes
+
+* correct YAML syntax in release.yml ([1eb76e6](https://github.com/IceRhymers/databricks-codex/commit/1eb76e6dbf31556db88772b2fe24b9f0ce0c5b1b))
+* correct YAML syntax in release.yml (missing newline before update-homebrew job) ([35c1db0](https://github.com/IceRhymers/databricks-codex/commit/35c1db011baa02d426a93f76636bcda7ad2331b5))
+
 ## [0.5.0](https://github.com/IceRhymers/databricks-codex/compare/v0.4.2...v0.5.0) (2026-04-07)
 
 
