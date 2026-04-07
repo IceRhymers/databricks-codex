@@ -57,21 +57,13 @@ func main() {
 	}
 
 	// --- Resolve profile ---
-	// Resolution chain: --profile flag → env var → saved state → "DEFAULT".
+	// Resolution chain: --profile flag → saved state → "DEFAULT".
+	// The env var DATABRICKS_CONFIG_PROFILE is intentionally NOT checked here;
+	// injected env vars (e.g. from Claude's settings.json) would silently
+	// override the user's saved proxy profile, routing to the wrong workspace.
 	// When --profile is explicitly passed, save it for future sessions.
 	profileExplicit := profile != ""
-	if profile == "" {
-		profile = os.Getenv("DATABRICKS_CONFIG_PROFILE")
-	}
-	if profile == "" {
-		if saved := loadState(); saved.Profile != "" {
-			profile = saved.Profile
-			log.Printf("databricks-codex: using saved profile: %s", profile)
-		}
-	}
-	if profile == "" {
-		profile = "DEFAULT"
-	}
+	profile = resolveProfile(profile, loadState().Profile)
 	if profileExplicit {
 		saved := loadState()
 		saved.Profile = profile
@@ -505,6 +497,20 @@ func handlePrintEnv(databricksHost, openaiBaseURL, token, profile, model, otelLo
   OTEL Logs Table:   %s
   Codex binary:      %s
 `, profile, model, databricksHost, openaiBaseURL, redacted, otelLogsTable, codexPath)
+}
+
+// resolveProfile returns the Databricks CLI profile using the resolution chain:
+// --profile flag → saved state → "DEFAULT".
+// The env var DATABRICKS_CONFIG_PROFILE is intentionally skipped; injected env
+// vars would silently override the user's saved proxy profile.
+func resolveProfile(flagValue string, savedValue string) string {
+	if flagValue != "" {
+		return flagValue
+	}
+	if savedValue != "" {
+		return savedValue
+	}
+	return "DEFAULT"
 }
 
 // resolveOtelLogsTable returns the OTEL logs table using the resolution chain:
