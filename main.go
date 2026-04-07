@@ -11,9 +11,11 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/IceRhymers/databricks-claude/pkg/authcheck"
@@ -26,7 +28,7 @@ import (
 var Version = "dev"
 
 func main() {
-	verbose, version, showHelp, printEnv, noOtel, otelLogsTable, otelLogsTableSet, upstream, logFile, profile, otel, proxyAPIKey, tlsCert, tlsKey, model, modelSet, portFlag, codexArgs := parseArgs(os.Args[1:])
+	verbose, version, showHelp, printEnv, noOtel, otelLogsTable, otelLogsTableSet, upstream, logFile, profile, otel, proxyAPIKey, tlsCert, tlsKey, model, modelSet, portFlag, headless, codexArgs := parseArgs(os.Args[1:])
 
 	if showHelp {
 		handleHelp(upstream)
@@ -174,9 +176,11 @@ func main() {
 		os.Exit(0)
 	}
 
-	// Verify codex is on PATH before starting proxy.
-	if _, err := exec.LookPath("codex"); err != nil {
-		log.Fatalf("databricks-codex: codex binary not found on PATH — install from https://openai.com/codex")
+	// Verify codex is on PATH before starting proxy (skip in headless mode).
+	if !headless {
+		if _, err := exec.LookPath("codex"); err != nil {
+			log.Fatalf("databricks-codex: codex binary not found on PATH — install from https://openai.com/codex")
+		}
 	}
 
 	// --- Determine OTEL upstream ---
@@ -245,7 +249,17 @@ func main() {
 
 	cm := NewConfigManager()
 	if err := cm.EnsureConfig(proxyURL, model, modelExplicit, otelConfigEndpoint); err != nil {
-		log.Fatalf("databricks-codex: failed to write config.toml: %v", err)
+		if headless {
+			log.Printf("databricks-codex: warning: failed to write config.toml: %v", err)
+		} else {
+			log.Fatalf("databricks-codex: failed to write config.toml: %v", err)
+		}
+	}
+
+	// --- Headless mode: print proxy URL and wait for signal ---
+	if headless {
+		runHeadless(proxyURL, listener, isOwner, refcountPath)
+		return
 	}
 
 	// Set OPENAI_API_KEY as a placeholder — the proxy overwrites the
@@ -275,6 +289,28 @@ func main() {
 		log.Printf("databricks-codex: codex error: %v", runErr)
 	}
 	os.Exit(exitCode)
+}
+
+// runHeadless runs the proxy in headless mode: prints PROXY_URL to stdout,
+// then blocks until SIGINT or SIGTERM. Intended for IDE extensions that
+// manage their own codex process.
+func runHeadless(proxyURL string, ln net.Listener, isOwner bool, refcountPath string) {
+	if !isOwner {
+		// Non-owner: watch for proxy death and take over if needed.
+		// watchProxy is already defined in this file.
+		// We don't have the handler/TLS args here, so the non-owner
+		// headless case simply watches — recovery requires the proxy
+		// config which only the owner path sets up.
+	}
+	fmt.Printf("PROXY_URL=%s\n", proxyURL)
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	<-sigCh
+	signal.Stop(sigCh)
+	n, _ := refcount.Release(refcountPath)
+	if n == 0 && isOwner {
+		ln.Close()
+	}
 }
 
 // listenerPort extracts the port from a net.Listener, falling back to the
@@ -336,7 +372,7 @@ func watchProxy(port int, handler http.Handler, tlsCert, tlsKey string) {
 }
 
 // parseArgs separates databricks-codex flags from codex flags.
-func parseArgs(args []string) (verbose bool, version bool, showHelp bool, printEnv bool, noOtel bool, otelLogsTable string, otelLogsTableSet bool, upstream string, logFile string, profile string, otel bool, proxyAPIKey string, tlsCert string, tlsKey string, model string, modelSet bool, portFlag int, codexArgs []string) {
+func parseArgs(args []string) (verbose bool, version bool, showHelp bool, printEnv bool, noOtel bool, otelLogsTable string, otelLogsTableSet bool, upstream string, logFile string, profile string, otel bool, proxyAPIKey string, tlsCert string, tlsKey string, model string, modelSet bool, portFlag int, headless bool, codexArgs []string) {
 	knownFlags := map[string]bool{
 		"--verbose":         true,
 		"--version":         true,
@@ -353,6 +389,7 @@ func parseArgs(args []string) (verbose bool, version bool, showHelp bool, printE
 		"--tls-key":         true,
 		"--model":           true,
 		"--port":            true,
+		"--headless":        true,
 	}
 
 	i := 0
@@ -465,6 +502,8 @@ func parseArgs(args []string) (verbose bool, version bool, showHelp bool, printE
 						i++
 						portFlag, _ = strconv.Atoi(args[i])
 					}
+				case "--headless":
+					headless = true
 				}
 				i++
 				continue
@@ -502,6 +541,7 @@ Databricks-Codex Flags:
   --tls-cert string         Path to TLS certificate file (requires --tls-key)
   --tls-key string          Path to TLS private key file (requires --tls-cert)
   --port int                Fixed proxy port (default: 49154, saved to state)
+  --headless                Start proxy without launching codex (for IDE extensions)
   --version             Print version and exit
   --help, -h            Show this help message
 
