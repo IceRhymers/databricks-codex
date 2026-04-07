@@ -98,6 +98,8 @@ func (m *Manager) Patch(cfg PatchConfig) error {
 	content := ""
 	if m.original != nil {
 		content = string(m.original)
+	} else if data, err := os.ReadFile(m.configPath); err == nil {
+		content = string(data)
 	}
 
 	// --- Save originals and patch root keys ---
