@@ -14,8 +14,8 @@ Databricks AI Gateway uses short-lived OAuth tokens. Without this tool, you'd ne
 2. Discovers your workspace host from `databricks auth env`
 3. Resolves your workspace ID via the SCIM API
 4. Constructs the Databricks AI Gateway URL
-5. Starts a local proxy that forwards Codex traffic upstream and refreshes the Databricks token automatically
-6. Temporarily patches `~/.codex/config.toml` so Codex talks to that local proxy
+5. Binds a local proxy on `127.0.0.1:49154` (fixed port — shared across concurrent sessions) that forwards traffic upstream and refreshes the Databricks token automatically
+6. Writes `~/.codex/config.toml` once to point at the proxy (idempotent — no restore on exit)
 7. Exec's `codex` with your args — fully transparent
 
 You use it exactly like `codex`. Every flag and argument is forwarded.
@@ -69,7 +69,9 @@ databricks-codex --upstream https://1234567890123456.ai-gateway.cloud.databricks
 | `--otel` | `true` | Enable OpenTelemetry logs export |
 | `--no-otel` | | Disable OpenTelemetry for this session |
 | `--otel-logs-table` | `main.codex_telemetry.codex_otel_logs` | Unity Catalog table for OpenTelemetry logs |
-| `--profile` | saved/`DEFAULT` | Databricks CLI profile to use and persist for future sessions |
+| `--profile` | saved/`DEFAULT` | Databricks CLI profile (saved to state file; `--profile` flag writes it once) |
+| `--model` | `databricks-gpt-5-4` | Model to use (saved for future sessions) |
+| `--port` | `49154` | Proxy listen port (saved for future sessions) |
 | `--upstream` | auto-discovered | Override the upstream inference URL the local proxy forwards to |
 | `--proxy-api-key` | disabled | Require this API key on all local proxy requests |
 | `--tls-cert` | | TLS certificate file for the local proxy (requires `--tls-key`) |
@@ -121,13 +123,13 @@ If the profile, host, or URL looks wrong, check your Databricks CLI setup with `
 
 ## Proxy behavior
 
-`databricks-codex` does not rely solely on exporting `OPENAI_BASE_URL` and `OPENAI_API_KEY` into the shell environment. Instead, it starts a localhost proxy for the current session and temporarily patches `~/.codex/config.toml` to point Codex at that proxy.
+`databricks-codex` does not rely solely on exporting `OPENAI_BASE_URL` and `OPENAI_API_KEY` into the shell environment. Instead, it binds a fixed local proxy on `127.0.0.1:49154` and writes `~/.codex/config.toml` once to point Codex at that proxy.
 
 This lets the wrapper:
 
 - Refresh Databricks OAuth tokens automatically during long Codex sessions
 - Keep Codex pointed at a stable local endpoint while upstream credentials rotate
-- Restore your original `~/.codex/config.toml` on exit, with multi-session handoff support
+- Support multiple concurrent sessions — first session owns the port, others join; last session out closes the listener
 
 ### View full usage
 
