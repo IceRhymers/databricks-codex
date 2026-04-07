@@ -5,16 +5,15 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
-	"github.com/IceRhymers/databricks-claude/pkg/filelock"
 	"github.com/IceRhymers/databricks-codex/pkg/tomlconfig"
 )
 
-// ConfigManager coordinates config.toml patching and file locking —
-// the Codex equivalent of databricks-claude's SettingsManager.
+// ConfigManager coordinates config.toml patching with in-process locking.
 type ConfigManager struct {
 	config *tomlconfig.Manager
-	lock   *filelock.FileLock
+	mu     sync.Mutex
 }
 
 // NewConfigManager creates a ConfigManager that manages ~/.codex/config.toml.
@@ -27,7 +26,6 @@ func NewConfigManager() *ConfigManager {
 	codexDir := filepath.Join(home, ".codex")
 	return &ConfigManager{
 		config: tomlconfig.NewManager(filepath.Join(codexDir, "config.toml")),
-		lock:   filelock.New(filepath.Join(codexDir, ".config.lock")),
 	}
 }
 
@@ -36,10 +34,8 @@ func NewConfigManager() *ConfigManager {
 // and if so returns nil (no-op). Otherwise it patches the config.
 // The config persists pointing at the fixed port permanently.
 func (cm *ConfigManager) EnsureConfig(proxyURL, model string, modelExplicit bool, otelEndpoint string) error {
-	if err := cm.lock.Lock(); err != nil {
-		log.Printf("databricks-codex: config lock warning: %v", err)
-	}
-	defer cm.lock.Unlock()
+	cm.mu.Lock()
+	defer cm.mu.Unlock()
 
 	// Read existing config to check idempotency.
 	existing, _ := os.ReadFile(cm.config.ConfigPath())
@@ -79,4 +75,3 @@ func (cm *ConfigManager) EnsureConfig(proxyURL, model string, modelExplicit bool
 	log.Printf("databricks-codex: wrote config.toml (proxy: %s)", proxyURL)
 	return nil
 }
-
