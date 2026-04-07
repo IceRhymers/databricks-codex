@@ -18,6 +18,8 @@ type ProxyConfig struct {
 	APIKey            string
 	TLSCertFile       string
 	TLSKeyFile        string
+	ToolName          string // reported by /health endpoint
+	Version           string // reported by /health endpoint
 }
 
 // NewProxyServer returns an http.Handler that routes requests to the
@@ -32,7 +34,16 @@ func NewProxyServer(config *ProxyConfig) http.Handler {
 		APIKey:            config.APIKey,
 		TLSCertFile:       config.TLSCertFile,
 		TLSKeyFile:        config.TLSKeyFile,
+		ToolName:          config.ToolName,
+		Version:           config.Version,
 	})
+}
+
+// ServeProxy starts the proxy on the given listener.
+// When config.TLSCertFile and config.TLSKeyFile are both set, the listener serves TLS.
+func ServeProxy(config *ProxyConfig, handler http.Handler, ln net.Listener) error {
+	_, err := proxy.Serve(ln, handler, config.TLSCertFile, config.TLSKeyFile)
+	return err
 }
 
 // StartProxy binds to 127.0.0.1:0, starts serving, and returns the listener.
