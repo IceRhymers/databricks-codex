@@ -25,6 +25,13 @@ You use it exactly like `codex`. Every flag and argument is forwarded.
 
 ## Installation
 
+### Via Homebrew (recommended)
+
+```bash
+brew tap IceRhymers/tap
+brew install databricks-codex
+```
+
 ### From source
 
 ```bash
@@ -150,3 +157,4 @@ make build
 ## License
 
 MIT
+
