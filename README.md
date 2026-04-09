@@ -183,6 +183,37 @@ Removes only the databricks-codex hook entries. Other hooks in your `hooks.json`
 - Safe to rerun `--install-hooks` after upgrades — existing hooks are replaced, not duplicated.
 - Custom port settings persist automatically via the state file (`~/.codex/.databricks-codex.json`).
 
+## Shell Tab Completions
+
+`databricks-codex` can generate shell completion scripts for bash, zsh, and fish. Completions are derived from the binary's own flag metadata and stay in sync automatically.
+
+### Install (one-time)
+
+**bash** — add to `~/.bashrc`:
+```bash
+eval "$(databricks-codex completion bash)"
+```
+
+**zsh** — add to `~/.zshrc`:
+```zsh
+eval "$(databricks-codex completion zsh)"
+```
+
+**fish** — add to `~/.config/fish/config.fish`:
+```fish
+databricks-codex completion fish | source
+```
+
+### Homebrew
+
+If installed via `brew install IceRhymers/tap/databricks-codex`, completions are installed automatically — no extra setup needed.
+
+### What completes
+
+- `--profile <TAB>` — lists profiles from `~/.databrickscfg` (updated live)
+- `--log-file`, `--tls-cert`, `--tls-key`, `--upstream <TAB>` — file path completion
+- All other flags — name completion when you type `-`
+
 ## Development
 
 ```bash
