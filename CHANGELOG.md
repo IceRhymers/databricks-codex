@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.7.0](https://github.com/IceRhymers/databricks-codex/compare/v0.6.0...v0.7.0) (2026-04-09)
+
+
+### Features
+
+* add POST /shutdown, idle timeout, and headless lifecycle hooks ([9e519dd](https://github.com/IceRhymers/databricks-codex/commit/9e519ddc5069a0a91039e171c13d411ca3919ad8)), closes [#43](https://github.com/IceRhymers/databricks-codex/issues/43)
+* add shell tab completions (bash/zsh/fish) ([e081b60](https://github.com/IceRhymers/databricks-codex/commit/e081b60f7cb5e0a58dba56ad1ef420c297b637bf))
+* add shell tab completions (bash/zsh/fish) ([a3c1bcd](https://github.com/IceRhymers/databricks-codex/commit/a3c1bcd62ddf1c1067352fbeb3acce2a4c367a30))
+* POST /shutdown + idle timeout + headless lifecycle ([1fce442](https://github.com/IceRhymers/databricks-codex/commit/1fce442542959076678dbe6bbd1b87c832a92c8d))
+
+
+### Bug Fixes
+
+* headless proxy lifecycle and Codex hook integration ([af0880b](https://github.com/IceRhymers/databricks-codex/commit/af0880bf88908e725a48b2769af63f99248db985))
+* retrigger homebrew dispatch for v0.5.x ([e4f3d7c](https://github.com/IceRhymers/databricks-codex/commit/e4f3d7c89dad1d6914a0a360651f05de9e3aae15))
+
 ## [0.6.0](https://github.com/IceRhymers/databricks-codex/compare/v0.5.0...v0.6.0) (2026-04-07)
 
 
