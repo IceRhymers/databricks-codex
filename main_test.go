@@ -760,3 +760,29 @@ func TestResolveProfile_Table(t *testing.T) {
 		})
 	}
 }
+
+// TestCompletionFlagsCoverAllKnownFlags ensures every flag in knownFlags has a
+// corresponding entry in flagDefs — prevents silent drift between the real CLI
+// and the generated shell completions.
+func TestCompletionFlagsCoverAllKnownFlags(t *testing.T) {
+	covered := make(map[string]bool, len(flagDefs))
+	for _, f := range flagDefs {
+		covered["--"+f.Name] = true
+	}
+	for flag := range knownFlags {
+		if !covered[flag] {
+			t.Errorf("flag %s is in knownFlags but missing from flagDefs in completion_flags.go", flag)
+		}
+	}
+}
+
+// TestKnownFlagsCoverAllFlagDefs is the inverse: every FlagDef must appear in
+// knownFlags so the parser actually recognises it.
+func TestKnownFlagsCoverAllFlagDefs(t *testing.T) {
+	for _, f := range flagDefs {
+		name := "--" + f.Name
+		if !knownFlags[name] {
+			t.Errorf("flagDef %q is missing from knownFlags in completion_flags.go", name)
+		}
+	}
+}
