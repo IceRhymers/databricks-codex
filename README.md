@@ -87,6 +87,10 @@ databricks-codex --upstream https://1234567890123456.ai-gateway.cloud.databricks
 | `--proxy-api-key` | disabled | Require this API key on all local proxy requests |
 | `--tls-cert` | | TLS certificate file for the local proxy (requires `--tls-key`) |
 | `--tls-key` | | TLS private key file for the local proxy (requires `--tls-cert`) |
+| `--headless` | `false` | Start proxy without launching codex (for IDE extensions or hooks) |
+| `--idle-timeout` | `30m` | Idle timeout for headless mode (`0` disables; bare number = minutes) |
+| `--install-hooks` | | Install SessionStart hook into `~/.codex/hooks.json` |
+| `--uninstall-hooks` | | Remove databricks-codex hooks from `~/.codex/hooks.json` |
 | `--version` | | Print version and exit |
 | `--help`, `-h` | | Print wrapper flags and the full `codex --help` output, then exit |
 
@@ -145,6 +149,39 @@ This lets the wrapper:
 ### View full usage
 
 `databricks-codex --help` (or `-h`) prints the wrapper's own flags followed by the complete `codex --help` output.
+
+## Session Hooks (automatic proxy lifecycle)
+
+Install hooks so every Codex session auto-starts the proxy on startup — no manual `--headless` needed.
+
+> **First-time setup:** Run `databricks-codex` at least once before installing hooks. This writes `~/.codex/config.toml` so the proxy is used for all Codex sessions.
+
+### Install
+
+```bash
+databricks-codex --install-hooks
+```
+
+This merges a **SessionStart** hook into `~/.codex/hooks.json` and enables the `codex_hooks` feature flag in `~/.codex/config.toml`:
+
+- **SessionStart** (`startup`): runs `databricks-codex --headless-ensure` — starts the proxy if it isn't already running.
+
+### Shutdown
+
+Unlike Claude Code, the Codex CLI does not have a `SessionEnd` hook event. The proxy shuts itself down automatically after **30 minutes of inactivity** (configurable via `--idle-timeout`). You can also stop it manually with `POST /shutdown` or by sending a signal to the process.
+
+### Uninstall
+
+```bash
+databricks-codex --uninstall-hooks
+```
+
+Removes only the databricks-codex hook entries. Other hooks in your `hooks.json` are untouched.
+
+### Notes
+
+- Safe to rerun `--install-hooks` after upgrades — existing hooks are replaced, not duplicated.
+- Custom port settings persist automatically via the state file (`~/.codex/.databricks-codex.json`).
 
 ## Development
 

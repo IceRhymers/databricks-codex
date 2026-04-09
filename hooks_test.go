@@ -16,17 +16,8 @@ func TestHeadlessEnsure_SkipManaged(t *testing.T) {
 	headlessEnsure(49154)
 }
 
-// TestHeadlessRelease_SkipManaged verifies that headlessRelease returns
-// immediately when DATABRICKS_CODEX_MANAGED=1 is set, without making any HTTP
-// requests.
-func TestHeadlessRelease_SkipManaged(t *testing.T) {
-	t.Setenv("DATABRICKS_CODEX_MANAGED", "1")
-	// Should return immediately without error or network call.
-	headlessRelease(49154)
-}
-
 // TestInstallHooks_CreatesFile verifies installHooks creates hooks.json
-// with the expected SessionStart and Stop hooks.
+// with the expected SessionStart hook.
 func TestInstallHooks_CreatesFile(t *testing.T) {
 	dir := t.TempDir()
 	hooksPath := filepath.Join(dir, ".codex", "hooks.json")
@@ -55,12 +46,6 @@ func TestInstallHooks_CreatesFile(t *testing.T) {
 	if len(ss) != 1 {
 		t.Fatalf("expected 1 SessionStart entry, got %d", len(ss))
 	}
-
-	// Check Stop
-	stop, _ := hooks["Stop"].([]interface{})
-	if len(stop) != 1 {
-		t.Fatalf("expected 1 Stop entry, got %d", len(stop))
-	}
 }
 
 // TestInstallHooks_Idempotent verifies running installHooks twice doesn't duplicate.
@@ -87,11 +72,6 @@ func TestInstallHooks_Idempotent(t *testing.T) {
 	ss := hooks["SessionStart"].([]interface{})
 	if len(ss) != 1 {
 		t.Errorf("expected 1 SessionStart entry after double install, got %d", len(ss))
-	}
-
-	stop := hooks["Stop"].([]interface{})
-	if len(stop) != 1 {
-		t.Errorf("expected 1 Stop entry after double install, got %d", len(stop))
 	}
 }
 

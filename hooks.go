@@ -8,33 +8,28 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
-
-	"github.com/IceRhymers/databricks-claude/pkg/refcount"
 )
 
 // headlessEnsure checks whether the proxy is healthy on the given port.
 // If not, it starts a detached headless proxy and polls until ready (max 10s).
 // Called by the SessionStart hook via: databricks-codex --headless-ensure
+//
+// The proxy shuts itself down via idle timeout — there is no corresponding
+// release hook because Codex CLI has no session-end event.
 func headlessEnsure(port int) {
 	if os.Getenv("DATABRICKS_CODEX_MANAGED") == "1" {
 		log.Printf("databricks-codex: --headless-ensure: skipped (managed session)")
 		return
 	}
 
-	// Acquire refcount FIRST so every ensure/release pair is symmetric.
-	refcountPath := refcountPathForPort(port)
-	if err := refcount.Acquire(refcountPath); err != nil {
-		log.Printf("databricks-codex: --headless-ensure: refcount acquire warning: %v", err)
-	}
-
 	if isProxyHealthy(port) {
-		return // already running, refcount incremented
+		return // already running
 	}
 
 	self, err := os.Executable()
 	if err != nil {
-		refcount.Release(refcountPath) // undo acquire on failure
 		log.Fatalf("databricks-codex: --headless-ensure: cannot find self: %v", err)
 	}
 
@@ -42,7 +37,6 @@ func headlessEnsure(port int) {
 	cmd.Stdout = nil
 	cmd.Stderr = nil
 	if err := cmd.Start(); err != nil {
-		refcount.Release(refcountPath) // undo acquire on failure
 		log.Fatalf("databricks-codex: --headless-ensure: failed to start proxy: %v", err)
 	}
 	if err := cmd.Process.Release(); err != nil {
@@ -56,26 +50,7 @@ func headlessEnsure(port int) {
 			return
 		}
 	}
-	refcount.Release(refcountPath) // undo acquire on failure
 	log.Fatalf("databricks-codex: --headless-ensure: proxy did not become healthy within 10s")
-}
-
-// headlessRelease calls POST /shutdown on the proxy to decrement the refcount.
-// Called by the Stop hook via: databricks-codex --headless-release
-// Errors are logged but not fatal — proxy may already be stopped.
-func headlessRelease(port int) {
-	if os.Getenv("DATABRICKS_CODEX_MANAGED") == "1" {
-		log.Printf("databricks-codex: --headless-release: skipped (managed session)")
-		return
-	}
-
-	client := &http.Client{Timeout: 3 * time.Second}
-	resp, err := client.Post(fmt.Sprintf("http://127.0.0.1:%d/shutdown", port), "application/json", nil)
-	if err != nil {
-		log.Printf("databricks-codex: --headless-release: %v (proxy may already be stopped)", err)
-		return
-	}
-	resp.Body.Close()
 }
 
 // isProxyHealthy returns true if the proxy on port responds to GET /health.
@@ -120,23 +95,14 @@ func installHooks(hooksPath string) error {
 	})
 	hooks["SessionStart"] = sessionStart
 
-	// Stop hook — decrements proxy refcount; proxy exits when last session ends.
-	// Codex CLI fires Stop when the session ends.
-	stop, _ := hooks["Stop"].([]interface{})
-	stop = append(stop, map[string]interface{}{
-		"matcher": "*",
-		"hooks": []interface{}{
-			map[string]interface{}{
-				"type":    "command",
-				"command": "databricks-codex --headless-release",
-				"timeout": 5,
-			},
-		},
-	})
-	hooks["Stop"] = stop
-
 	doc["hooks"] = hooks
-	return writeHooksDoc(hooksPath, doc)
+	if err := writeHooksDoc(hooksPath, doc); err != nil {
+		return err
+	}
+
+	// Codex CLI requires [features] codex_hooks = true to read hooks.json.
+	configPath := filepath.Join(filepath.Dir(hooksPath), "config.toml")
+	return ensureHooksFeatureFlag(configPath)
 }
 
 // uninstallHooks removes the databricks-codex hooks from ~/.codex/hooks.json.
@@ -225,4 +191,47 @@ func writeHooksDoc(path string, doc map[string]interface{}) error {
 	}
 	data = append(data, '\n')
 	return os.WriteFile(path, data, 0o600)
+}
+
+// ensureHooksFeatureFlag ensures config.toml contains codex_hooks = true
+// inside a [features] section. Surgical: if the key already exists it's a
+// no-op; if [features] exists the key is appended inside it; otherwise a
+// new section is appended at the end.
+func ensureHooksFeatureFlag(configPath string) error {
+	data, err := os.ReadFile(configPath)
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("reading config.toml: %w", err)
+	}
+	content := string(data)
+
+	// Already enabled — nothing to do.
+	if strings.Contains(content, "codex_hooks") {
+		return nil
+	}
+
+	// Find the [features] section header.
+	idx := strings.Index(content, "[features]")
+	if idx >= 0 {
+		// Insert the key right after the header line.
+		end := strings.Index(content[idx:], "\n")
+		if end < 0 {
+			end = len(content[idx:])
+		}
+		insertAt := idx + end
+		content = content[:insertAt] + "\ncodex_hooks = true" + content[insertAt:]
+	} else {
+		// Append a new [features] section.
+		sep := "\n"
+		if len(content) > 0 && !strings.HasSuffix(content, "\n") {
+			sep = "\n\n"
+		} else if len(content) > 0 {
+			sep = "\n"
+		}
+		content += sep + "[features]\ncodex_hooks = true\n"
+	}
+
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o700); err != nil {
+		return fmt.Errorf("creating config dir: %w", err)
+	}
+	return os.WriteFile(configPath, []byte(content), 0o600)
 }

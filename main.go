@@ -30,7 +30,7 @@ import (
 var Version = "dev"
 
 func main() {
-	verbose, version, showHelp, printEnv, noOtel, otelLogsTable, otelLogsTableSet, upstream, logFile, profile, otel, proxyAPIKey, tlsCert, tlsKey, model, modelSet, portFlag, headless, idleTimeout, installHooksFlag, uninstallHooksFlag, headlessEnsureFlag, headlessReleaseFlag, codexArgs := parseArgs(os.Args[1:])
+	verbose, version, showHelp, printEnv, noOtel, otelLogsTable, otelLogsTableSet, upstream, logFile, profile, otel, proxyAPIKey, tlsCert, tlsKey, model, modelSet, portFlag, headless, idleTimeout, installHooksFlag, uninstallHooksFlag, headlessEnsureFlag, codexArgs := parseArgs(os.Args[1:])
 
 	if showHelp {
 		handleHelp(upstream)
@@ -53,7 +53,7 @@ func main() {
 			if err := installHooks(hp); err != nil {
 				log.Fatalf("databricks-codex: --install-hooks: %v", err)
 			}
-			fmt.Fprintln(os.Stderr, "databricks-codex: hooks installed — SessionStart and SessionEnd hooks added to ~/.codex/hooks.json")
+			fmt.Fprintln(os.Stderr, "databricks-codex: hooks installed — SessionStart hook added to ~/.codex/hooks.json")
 		} else {
 			if err := uninstallHooks(hp); err != nil {
 				log.Fatalf("databricks-codex: --uninstall-hooks: %v", err)
@@ -63,15 +63,11 @@ func main() {
 		os.Exit(0)
 	}
 
-	// --- Headless hook commands (called by installed hooks, not by end users) ---
-	if headlessEnsureFlag || headlessReleaseFlag {
+	// --- Headless hook command (called by installed hooks, not by end users) ---
+	if headlessEnsureFlag {
 		state := loadState()
 		port := resolvePort(portFlag, state)
-		if headlessEnsureFlag {
-			headlessEnsure(port)
-		} else {
-			headlessRelease(port)
-		}
+		headlessEnsure(port)
 		os.Exit(0)
 	}
 
@@ -255,6 +251,25 @@ func main() {
 		Version:           Version,
 	})
 
+	// --- Reference counting ---
+	// In wrapper mode, the parent process acquires here and releases on exit.
+	// In headless mode, the proxy shuts down via idle timeout (no refcount).
+	refcountPath := refcountPathForPort(port)
+	if !headless {
+		if err := refcount.Acquire(refcountPath); err != nil {
+			log.Printf("databricks-codex: refcount acquire warning: %v", err)
+		}
+	}
+
+	// In headless mode, wrap handler with /shutdown endpoint and idle timeout.
+	// This must happen BEFORE proxy.Serve so the lifecycle mux is the handler
+	// that actually gets served.
+	var doneCh chan struct{}
+	if headless {
+		doneCh = make(chan struct{})
+		proxyHandler = wrapWithLifecycle(proxyHandler, refcountPath, isOwner, idleTimeout, proxyAPIKey, doneCh)
+	}
+
 	// --- Start proxy if we own the port ---
 	if isOwner {
 		servedLn, err := proxy.Serve(listener, proxyHandler, tlsCert, tlsKey)
@@ -269,25 +284,6 @@ func main() {
 		go watchProxy(port, proxyHandler, tlsCert, tlsKey)
 	}
 	log.Printf("databricks-codex: proxy on %s (owner=%v)", proxyURL, isOwner)
-
-	// --- Reference counting ---
-	// In headless mode, sessions manage the refcount via hooks (--headless-ensure
-	// acquires, --headless-release releases). The proxy itself does NOT self-acquire
-	// so the last session's release brings the count to 0 and triggers shutdown.
-	// In wrapper mode, the parent process acquires here and releases on exit.
-	refcountPath := refcountPathForPort(port)
-	if !headless {
-		if err := refcount.Acquire(refcountPath); err != nil {
-			log.Printf("databricks-codex: refcount acquire warning: %v", err)
-		}
-	}
-
-	// In headless mode, wrap handler with /shutdown endpoint and idle timeout.
-	var doneCh chan struct{}
-	if headless {
-		doneCh = make(chan struct{})
-		proxyHandler = wrapWithLifecycle(proxyHandler, refcountPath, isOwner, idleTimeout, proxyAPIKey, doneCh)
-	}
 
 	// --- Write config once (idempotent) ---
 	otelConfigEndpoint := ""
@@ -501,7 +497,7 @@ func watchProxy(port int, handler http.Handler, tlsCert, tlsKey string) {
 }
 
 // parseArgs separates databricks-codex flags from codex flags.
-func parseArgs(args []string) (verbose bool, version bool, showHelp bool, printEnv bool, noOtel bool, otelLogsTable string, otelLogsTableSet bool, upstream string, logFile string, profile string, otel bool, proxyAPIKey string, tlsCert string, tlsKey string, model string, modelSet bool, portFlag int, headless bool, idleTimeout time.Duration, installHooksFlag bool, uninstallHooksFlag bool, headlessEnsureFlag bool, headlessReleaseFlag bool, codexArgs []string) {
+func parseArgs(args []string) (verbose bool, version bool, showHelp bool, printEnv bool, noOtel bool, otelLogsTable string, otelLogsTableSet bool, upstream string, logFile string, profile string, otel bool, proxyAPIKey string, tlsCert string, tlsKey string, model string, modelSet bool, portFlag int, headless bool, idleTimeout time.Duration, installHooksFlag bool, uninstallHooksFlag bool, headlessEnsureFlag bool, codexArgs []string) {
 	idleTimeout = 30 * time.Minute // default
 
 	knownFlags := map[string]bool{
@@ -525,7 +521,6 @@ func parseArgs(args []string) (verbose bool, version bool, showHelp bool, printE
 		"--install-hooks":    true,
 		"--uninstall-hooks":  true,
 		"--headless-ensure":  true,
-		"--headless-release": true,
 	}
 
 	i := 0
@@ -660,8 +655,6 @@ func parseArgs(args []string) (verbose bool, version bool, showHelp bool, printE
 					uninstallHooksFlag = true
 				case "--headless-ensure":
 					headlessEnsureFlag = true
-				case "--headless-release":
-					headlessReleaseFlag = true
 				}
 				i++
 				continue
@@ -701,9 +694,8 @@ Databricks-Codex Flags:
   --port int                Fixed proxy port (default: 49154, saved to state)
   --headless                Start proxy without launching codex (for IDE extensions)
   --headless-ensure         Start proxy if not running (called by SessionStart hook)
-  --headless-release        Decrement proxy refcount (called by SessionEnd hook)
   --idle-timeout duration   Idle timeout for headless mode (default 30m, 0 disables, bare number = minutes)
-  --install-hooks           Install SessionStart/SessionEnd hooks into ~/.codex/hooks.json
+  --install-hooks           Install SessionStart hook into ~/.codex/hooks.json
   --uninstall-hooks         Remove databricks-codex hooks from ~/.codex/hooks.json
   --version             Print version and exit
   --help, -h            Show this help message
