@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"os"
 	"os/exec"
 
 	"github.com/IceRhymers/databricks-claude/pkg/childproc"
@@ -26,7 +27,10 @@ var otelKeys = []string{
 // and waits for it to exit. OTEL environment variables are expected to be set
 // on os.Environ by main.go before calling this function. The API key and base
 // URL are configured via config.toml (not environment variables).
+// DATABRICKS_CODEX_MANAGED=1 is injected so that child codex sessions skip
+// headless-ensure/release hooks (prevents double-firing).
 func RunCodex(ctx context.Context, args []string) (int, error) {
+	os.Setenv("DATABRICKS_CODEX_MANAGED", "1")
 	return childproc.Run(ctx, childproc.Config{
 		BinaryName: "codex",
 		Args:       args,

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -15,6 +16,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -28,7 +30,7 @@ import (
 var Version = "dev"
 
 func main() {
-	verbose, version, showHelp, printEnv, noOtel, otelLogsTable, otelLogsTableSet, upstream, logFile, profile, otel, proxyAPIKey, tlsCert, tlsKey, model, modelSet, portFlag, headless, codexArgs := parseArgs(os.Args[1:])
+	verbose, version, showHelp, printEnv, noOtel, otelLogsTable, otelLogsTableSet, upstream, logFile, profile, otel, proxyAPIKey, tlsCert, tlsKey, model, modelSet, portFlag, headless, idleTimeout, installHooksFlag, uninstallHooksFlag, headlessEnsureFlag, codexArgs := parseArgs(os.Args[1:])
 
 	if showHelp {
 		handleHelp(upstream)
@@ -37,6 +39,35 @@ func main() {
 
 	if version {
 		fmt.Printf("databricks-codex %s\n", Version)
+		os.Exit(0)
+	}
+
+	// --- Hook lifecycle commands (handled before auth/config setup) ---
+	if installHooksFlag || uninstallHooksFlag {
+		homeDir, err := os.UserHomeDir()
+		if err != nil {
+			log.Fatalf("databricks-codex: cannot determine home dir: %v", err)
+		}
+		hp := filepath.Join(homeDir, ".codex", "hooks.json")
+		if installHooksFlag {
+			if err := installHooks(hp); err != nil {
+				log.Fatalf("databricks-codex: --install-hooks: %v", err)
+			}
+			fmt.Fprintln(os.Stderr, "databricks-codex: hooks installed — SessionStart hook added to ~/.codex/hooks.json")
+		} else {
+			if err := uninstallHooks(hp); err != nil {
+				log.Fatalf("databricks-codex: --uninstall-hooks: %v", err)
+			}
+			fmt.Fprintln(os.Stderr, "databricks-codex: hooks removed from ~/.codex/hooks.json")
+		}
+		os.Exit(0)
+	}
+
+	// --- Headless hook command (called by installed hooks, not by end users) ---
+	if headlessEnsureFlag {
+		state := loadState()
+		port := resolvePort(portFlag, state)
+		headlessEnsure(port)
 		os.Exit(0)
 	}
 
@@ -220,6 +251,25 @@ func main() {
 		Version:           Version,
 	})
 
+	// --- Reference counting ---
+	// In wrapper mode, the parent process acquires here and releases on exit.
+	// In headless mode, the proxy shuts down via idle timeout (no refcount).
+	refcountPath := refcountPathForPort(port)
+	if !headless {
+		if err := refcount.Acquire(refcountPath); err != nil {
+			log.Printf("databricks-codex: refcount acquire warning: %v", err)
+		}
+	}
+
+	// In headless mode, wrap handler with /shutdown endpoint and idle timeout.
+	// This must happen BEFORE proxy.Serve so the lifecycle mux is the handler
+	// that actually gets served.
+	var doneCh chan struct{}
+	if headless {
+		doneCh = make(chan struct{})
+		proxyHandler = wrapWithLifecycle(proxyHandler, refcountPath, isOwner, idleTimeout, proxyAPIKey, doneCh)
+	}
+
 	// --- Start proxy if we own the port ---
 	if isOwner {
 		servedLn, err := proxy.Serve(listener, proxyHandler, tlsCert, tlsKey)
@@ -234,12 +284,6 @@ func main() {
 		go watchProxy(port, proxyHandler, tlsCert, tlsKey)
 	}
 	log.Printf("databricks-codex: proxy on %s (owner=%v)", proxyURL, isOwner)
-
-	// --- Reference counting ---
-	refcountPath := filepath.Join(os.TempDir(), fmt.Sprintf(".databricks-codex-sessions-%d", port))
-	if err := refcount.Acquire(refcountPath); err != nil {
-		log.Printf("databricks-codex: refcount acquire warning: %v", err)
-	}
 
 	// --- Write config once (idempotent) ---
 	otelConfigEndpoint := ""
@@ -258,7 +302,7 @@ func main() {
 
 	// --- Headless mode: print proxy URL and wait for signal ---
 	if headless {
-		runHeadless(proxyURL, listener, isOwner, refcountPath)
+		runHeadless(proxyURL, listener, isOwner, refcountPath, doneCh)
 		return
 	}
 
@@ -287,26 +331,111 @@ func main() {
 	os.Exit(exitCode)
 }
 
-// runHeadless runs the proxy in headless mode: prints PROXY_URL to stdout,
-// then blocks until SIGINT or SIGTERM. Intended for IDE extensions that
-// manage their own codex process.
-func runHeadless(proxyURL string, ln net.Listener, isOwner bool, refcountPath string) {
-	if !isOwner {
-		// Non-owner: watch for proxy death and take over if needed.
-		// watchProxy is already defined in this file.
-		// We don't have the handler/TLS args here, so the non-owner
-		// headless case simply watches — recovery requires the proxy
-		// config which only the owner path sets up.
-	}
+// runHeadless runs the proxy without launching a codex child process.
+// It prints the proxy URL to stdout, then blocks until SIGINT/SIGTERM
+// or until doneCh is closed (by /shutdown or idle timeout).
+// The watchProxy goroutine (for non-owner sessions) is already started
+// before this function is called.
+func runHeadless(proxyURL string, ln net.Listener, isOwner bool, refcountPath string, doneCh chan struct{}) {
 	fmt.Printf("PROXY_URL=%s\n", proxyURL)
+
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-	<-sigCh
-	signal.Stop(sigCh)
+
+	select {
+	case <-sigCh:
+		signal.Stop(sigCh)
+	case <-doneCh:
+		// Triggered by /shutdown or idle timeout.
+	}
+
+	// Release refcount. If /shutdown already released, Release floors at 0.
 	n, _ := refcount.Release(refcountPath)
 	if n == 0 && isOwner {
 		ln.Close()
 	}
+}
+
+// shutdownResponse is the JSON body returned by POST /shutdown.
+type shutdownResponse struct {
+	Remaining int  `json:"remaining"`
+	Exiting   bool `json:"exiting"`
+}
+
+// wrapWithLifecycle wraps the proxy handler with:
+//   - POST /shutdown: decrements refcount and conditionally shuts down
+//   - Activity tracking: resets the idle timer on every proxied request
+//
+// It returns the wrapped handler. doneCh is closed when shutdown is triggered
+// (either via /shutdown or idle timeout). The caller selects on doneCh to
+// begin cleanup.
+func wrapWithLifecycle(
+	inner http.Handler,
+	refcountPath string,
+	isOwner bool,
+	idleTimeout time.Duration,
+	apiKey string,
+	doneCh chan struct{},
+) http.Handler {
+	var shutdownOnce sync.Once
+	triggerShutdown := func() {
+		shutdownOnce.Do(func() { close(doneCh) })
+	}
+
+	// Idle timer: fires once after idleTimeout of inactivity.
+	// Reset on every proxied request. time.AfterFunc is goroutine-safe.
+	var idleTimer *time.Timer
+	if idleTimeout > 0 {
+		idleTimer = time.AfterFunc(idleTimeout, func() {
+			log.Printf("databricks-codex: idle timeout (%s), shutting down", idleTimeout)
+			triggerShutdown()
+		})
+	}
+
+	mux := http.NewServeMux()
+
+	mux.HandleFunc("/shutdown", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		// Enforce API key if configured (matches requireAPIKey in pkg/proxy).
+		if apiKey != "" {
+			if r.Header.Get("Authorization") != "Bearer "+apiKey {
+				http.Error(w, "Unauthorized", http.StatusUnauthorized)
+				return
+			}
+		}
+		remaining, err := refcount.Release(refcountPath)
+		if err != nil {
+			log.Printf("databricks-codex: shutdown refcount release error: %v", err)
+		}
+		exiting := remaining == 0 && isOwner
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(shutdownResponse{Remaining: remaining, Exiting: exiting})
+		if exiting {
+			// Stop idle timer to avoid double-shutdown.
+			if idleTimer != nil {
+				idleTimer.Stop()
+			}
+			triggerShutdown()
+		}
+	})
+
+	// All other routes: reset idle timer, then delegate to inner handler.
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if idleTimer != nil {
+			idleTimer.Reset(idleTimeout)
+		}
+		inner.ServeHTTP(w, r)
+	})
+
+	return mux
+}
+
+// refcountPathForPort returns the file path used for cross-process session counting.
+func refcountPathForPort(port int) string {
+	return filepath.Join(os.TempDir(), fmt.Sprintf(".databricks-codex-sessions-%d", port))
 }
 
 // listenerPort extracts the port from a net.Listener, falling back to the
@@ -368,24 +497,30 @@ func watchProxy(port int, handler http.Handler, tlsCert, tlsKey string) {
 }
 
 // parseArgs separates databricks-codex flags from codex flags.
-func parseArgs(args []string) (verbose bool, version bool, showHelp bool, printEnv bool, noOtel bool, otelLogsTable string, otelLogsTableSet bool, upstream string, logFile string, profile string, otel bool, proxyAPIKey string, tlsCert string, tlsKey string, model string, modelSet bool, portFlag int, headless bool, codexArgs []string) {
+func parseArgs(args []string) (verbose bool, version bool, showHelp bool, printEnv bool, noOtel bool, otelLogsTable string, otelLogsTableSet bool, upstream string, logFile string, profile string, otel bool, proxyAPIKey string, tlsCert string, tlsKey string, model string, modelSet bool, portFlag int, headless bool, idleTimeout time.Duration, installHooksFlag bool, uninstallHooksFlag bool, headlessEnsureFlag bool, codexArgs []string) {
+	idleTimeout = 30 * time.Minute // default
+
 	knownFlags := map[string]bool{
-		"--verbose":         true,
-		"--version":         true,
-		"--help":            true,
-		"--print-env":       true,
-		"--no-otel":         true,
-		"--otel":            true,
-		"--otel-logs-table": true,
-		"--upstream":        true,
-		"--log-file":        true,
-		"--profile":         true,
-		"--proxy-api-key":   true,
-		"--tls-cert":        true,
-		"--tls-key":         true,
-		"--model":           true,
-		"--port":            true,
-		"--headless":        true,
+		"--verbose":          true,
+		"--version":          true,
+		"--help":             true,
+		"--print-env":        true,
+		"--no-otel":          true,
+		"--otel":             true,
+		"--otel-logs-table":  true,
+		"--upstream":         true,
+		"--log-file":         true,
+		"--profile":          true,
+		"--proxy-api-key":    true,
+		"--tls-cert":         true,
+		"--tls-key":          true,
+		"--model":            true,
+		"--port":             true,
+		"--headless":         true,
+		"--idle-timeout":     true,
+		"--install-hooks":    true,
+		"--uninstall-hooks":  true,
+		"--headless-ensure":  true,
 	}
 
 	i := 0
@@ -500,6 +635,26 @@ func parseArgs(args []string) (verbose bool, version bool, showHelp bool, printE
 					}
 				case "--headless":
 					headless = true
+				case "--idle-timeout":
+					raw := value
+					if raw == "" && i+1 < len(args) {
+						i++
+						raw = args[i]
+					}
+					if raw != "" {
+						if d, err := time.ParseDuration(raw); err == nil {
+							idleTimeout = d
+						} else if mins, err := strconv.Atoi(raw); err == nil {
+							// Bare number: treat as minutes for convenience.
+							idleTimeout = time.Duration(mins) * time.Minute
+						}
+					}
+				case "--install-hooks":
+					installHooksFlag = true
+				case "--uninstall-hooks":
+					uninstallHooksFlag = true
+				case "--headless-ensure":
+					headlessEnsureFlag = true
 				}
 				i++
 				continue
@@ -538,6 +693,10 @@ Databricks-Codex Flags:
   --tls-key string          Path to TLS private key file (requires --tls-cert)
   --port int                Fixed proxy port (default: 49154, saved to state)
   --headless                Start proxy without launching codex (for IDE extensions)
+  --headless-ensure         Start proxy if not running (called by SessionStart hook)
+  --idle-timeout duration   Idle timeout for headless mode (default 30m, 0 disables, bare number = minutes)
+  --install-hooks           Install SessionStart hook into ~/.codex/hooks.json
+  --uninstall-hooks         Remove databricks-codex hooks from ~/.codex/hooks.json
   --version             Print version and exit
   --help, -h            Show this help message
 
