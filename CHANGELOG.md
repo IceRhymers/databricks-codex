@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.7.1](https://github.com/IceRhymers/databricks-codex/compare/v0.7.0...v0.7.1) (2026-04-09)
+
+
+### Bug Fixes
+
+* bump databricks-claude to v0.10.1 for completion --shell= support ([3eb7a89](https://github.com/IceRhymers/databricks-codex/commit/3eb7a896e1dad6b7f5e1fee33c181f0d5cf2c9a5))
+* bump databricks-claude to v0.10.1 to fix completion --shell= flag ([120673d](https://github.com/IceRhymers/databricks-codex/commit/120673d8d628dc78dedda67748bd40199d3accb0))
+
 ## [0.7.0](https://github.com/IceRhymers/databricks-codex/compare/v0.6.0...v0.7.0) (2026-04-09)
 
 
