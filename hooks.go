@@ -3,12 +3,12 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"log"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
-	"time"
+
+	"github.com/IceRhymers/databricks-claude/pkg/headless"
+	"github.com/IceRhymers/databricks-claude/pkg/refcount"
 )
 
 // headlessEnsure checks whether the proxy is healthy on the given port.
@@ -18,49 +18,20 @@ import (
 // The proxy shuts itself down via idle timeout — there is no corresponding
 // release hook because Codex CLI has no session-end event.
 func headlessEnsure(port int) {
-	if os.Getenv("DATABRICKS_CODEX_MANAGED") == "1" {
-		log.Printf("databricks-codex: --headless-ensure: skipped (managed session)")
-		return
-	}
-
-	// Determine scheme from saved TLS config.
-	state := loadState()
+	s := loadState()
 	scheme := "http"
-	if state.TLSCert != "" && state.TLSKey != "" {
+	if s.TLSCert != "" {
 		scheme = "https"
 	}
-
-	if proxyHealthy(port, scheme) {
-		return // already running
-	}
-
-	self, err := os.Executable()
-	if err != nil {
-		log.Fatalf("databricks-codex: --headless-ensure: cannot find self: %v", err)
-	}
-
-	args := []string{"--headless", fmt.Sprintf("--port=%d", port)}
-	if state.TLSCert != "" && state.TLSKey != "" {
-		args = append(args, fmt.Sprintf("--tls-cert=%s", state.TLSCert), fmt.Sprintf("--tls-key=%s", state.TLSKey))
-	}
-	cmd := exec.Command(self, args...)
-	cmd.Stdout = nil
-	cmd.Stderr = nil
-	if err := cmd.Start(); err != nil {
-		log.Fatalf("databricks-codex: --headless-ensure: failed to start proxy: %v", err)
-	}
-	if err := cmd.Process.Release(); err != nil {
-		log.Printf("databricks-codex: --headless-ensure: release warning: %v", err)
-	}
-
-	// Poll until healthy or timeout.
-	for i := 0; i < 20; i++ {
-		time.Sleep(500 * time.Millisecond)
-		if proxyHealthy(port, scheme) {
-			return
-		}
-	}
-	log.Fatalf("databricks-codex: --headless-ensure: proxy did not become healthy within 10s")
+	headless.Ensure(headless.Config{
+		Port:          port,
+		Scheme:        scheme,
+		TLSCert:       s.TLSCert,
+		TLSKey:        s.TLSKey,
+		ManagedEnvVar: "DATABRICKS_CODEX_MANAGED",
+		LogPrefix:     "databricks-codex",
+		RefcountPath:  refcount.PathForPort(".databricks-codex-sessions", port),
+	})
 }
 
 // installHooks merges the databricks-codex SessionStart and Stop hooks into
