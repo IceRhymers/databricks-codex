@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.8.0](https://github.com/IceRhymers/databricks-codex/compare/v0.7.1...v0.8.0) (2026-04-10)
+
+
+### Features
+
+* add update subcommand and startup update check ([71fc80f](https://github.com/IceRhymers/databricks-codex/commit/71fc80fe8827fa901d5671e2ab47f10a245020c5))
+* add update subcommand and startup update check ([cdcdb44](https://github.com/IceRhymers/databricks-codex/commit/cdcdb44414180b19735093491c2e6348b4418cae))
+* add update subcommand and startup update check ([f22701f](https://github.com/IceRhymers/databricks-codex/commit/f22701ff6b672962747f93c54f36b915f5650c28)), closes [#49](https://github.com/IceRhymers/databricks-codex/issues/49)
+* add update subcommand and startup update check ([#53](https://github.com/IceRhymers/databricks-codex/issues/53)) ([c56bda6](https://github.com/IceRhymers/databricks-codex/commit/c56bda66b8adbcc455e2a3fa7b7b72b86105914f))
+
+
+### Bug Fixes
+
+* make headlessEnsure TLS-aware to prevent health check failures with HTTPS ([d16017e](https://github.com/IceRhymers/databricks-codex/commit/d16017ec4e736273623bbff2b61a1042f24f8549)), closes [#56](https://github.com/IceRhymers/databricks-codex/issues/56)
+
 ## [0.7.1](https://github.com/IceRhymers/databricks-codex/compare/v0.7.0...v0.7.1) (2026-04-09)
 
 
