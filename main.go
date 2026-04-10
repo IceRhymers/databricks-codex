@@ -3,25 +3,23 @@ package main
 import (
 	"bytes"
 	"context"
-	"crypto/tls"
-	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"net"
-	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 
 	"github.com/IceRhymers/databricks-claude/pkg/authcheck"
 	"github.com/IceRhymers/databricks-claude/pkg/completion"
+	"github.com/IceRhymers/databricks-claude/pkg/health"
+	"github.com/IceRhymers/databricks-claude/pkg/lifecycle"
 	"github.com/IceRhymers/databricks-claude/pkg/portbind"
 	"github.com/IceRhymers/databricks-claude/pkg/proxy"
 	"github.com/IceRhymers/databricks-claude/pkg/refcount"
@@ -280,7 +278,7 @@ func main() {
 		scheme = "https"
 		fmt.Fprintln(os.Stderr, "databricks-codex: TLS enabled")
 	}
-	proxyURL := fmt.Sprintf("%s://127.0.0.1:%d", scheme, listenerPort(listener, port))
+	proxyURL := fmt.Sprintf("%s://127.0.0.1:%d", scheme, portbind.ListenerPort(listener, port))
 
 	// --- Proxy handler (needed by owner and recovery goroutine) ---
 	if proxyAPIKey != "" {
@@ -302,7 +300,7 @@ func main() {
 	// --- Reference counting ---
 	// In wrapper mode, the parent process acquires here and releases on exit.
 	// In headless mode, the proxy shuts down via idle timeout (no refcount).
-	refcountPath := refcountPathForPort(port)
+	refcountPath := refcount.PathForPort(".databricks-codex-sessions", port)
 	if !headless {
 		if err := refcount.Acquire(refcountPath); err != nil {
 			log.Printf("databricks-codex: refcount acquire warning: %v", err)
@@ -315,7 +313,15 @@ func main() {
 	var doneCh chan struct{}
 	if headless {
 		doneCh = make(chan struct{})
-		proxyHandler = wrapWithLifecycle(proxyHandler, refcountPath, isOwner, idleTimeout, proxyAPIKey, doneCh)
+		proxyHandler = lifecycle.WrapWithLifecycle(lifecycle.Config{
+			Inner:        proxyHandler,
+			RefcountPath: refcountPath,
+			IsOwner:      isOwner,
+			IdleTimeout:  idleTimeout,
+			APIKey:       proxyAPIKey,
+			DoneCh:       doneCh,
+			LogPrefix:    "databricks-codex",
+		})
 	}
 
 	// --- Start proxy if we own the port ---
@@ -329,7 +335,7 @@ func main() {
 	} else {
 		log.Printf("databricks-codex: joining existing proxy on :%d", port)
 		// Watch for owner death and take over the proxy if needed.
-		go watchProxy(port, proxyHandler, tlsCert, tlsKey)
+		go health.WatchProxy(port, proxyHandler, tlsCert, tlsKey, "databricks-codex")
 	}
 	log.Printf("databricks-codex: proxy on %s (owner=%v)", proxyURL, isOwner)
 
@@ -360,7 +366,7 @@ func main() {
 
 	// --- Synchronous update check (before child to avoid stderr interleaving) ---
 	if !noUpdateCheck && os.Getenv("DATABRICKS_NO_UPDATE_CHECK") != "1" {
-		printUpdateNotice(buildUpdaterConfig())
+		updater.PrintUpdateNotice(buildUpdaterConfig())
 	}
 
 	log.Printf("databricks-codex: launching codex")
@@ -409,145 +415,6 @@ func runHeadless(proxyURL string, ln net.Listener, isOwner bool, refcountPath st
 	}
 }
 
-// shutdownResponse is the JSON body returned by POST /shutdown.
-type shutdownResponse struct {
-	Remaining int  `json:"remaining"`
-	Exiting   bool `json:"exiting"`
-}
-
-// wrapWithLifecycle wraps the proxy handler with:
-//   - POST /shutdown: decrements refcount and conditionally shuts down
-//   - Activity tracking: resets the idle timer on every proxied request
-//
-// It returns the wrapped handler. doneCh is closed when shutdown is triggered
-// (either via /shutdown or idle timeout). The caller selects on doneCh to
-// begin cleanup.
-func wrapWithLifecycle(
-	inner http.Handler,
-	refcountPath string,
-	isOwner bool,
-	idleTimeout time.Duration,
-	apiKey string,
-	doneCh chan struct{},
-) http.Handler {
-	var shutdownOnce sync.Once
-	triggerShutdown := func() {
-		shutdownOnce.Do(func() { close(doneCh) })
-	}
-
-	// Idle timer: fires once after idleTimeout of inactivity.
-	// Reset on every proxied request. time.AfterFunc is goroutine-safe.
-	var idleTimer *time.Timer
-	if idleTimeout > 0 {
-		idleTimer = time.AfterFunc(idleTimeout, func() {
-			log.Printf("databricks-codex: idle timeout (%s), shutting down", idleTimeout)
-			triggerShutdown()
-		})
-	}
-
-	mux := http.NewServeMux()
-
-	mux.HandleFunc("/shutdown", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		// Enforce API key if configured (matches requireAPIKey in pkg/proxy).
-		if apiKey != "" {
-			if r.Header.Get("Authorization") != "Bearer "+apiKey {
-				http.Error(w, "Unauthorized", http.StatusUnauthorized)
-				return
-			}
-		}
-		remaining, err := refcount.Release(refcountPath)
-		if err != nil {
-			log.Printf("databricks-codex: shutdown refcount release error: %v", err)
-		}
-		exiting := remaining == 0 && isOwner
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(shutdownResponse{Remaining: remaining, Exiting: exiting})
-		if exiting {
-			// Stop idle timer to avoid double-shutdown.
-			if idleTimer != nil {
-				idleTimer.Stop()
-			}
-			triggerShutdown()
-		}
-	})
-
-	// All other routes: reset idle timer, then delegate to inner handler.
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		if idleTimer != nil {
-			idleTimer.Reset(idleTimeout)
-		}
-		inner.ServeHTTP(w, r)
-	})
-
-	return mux
-}
-
-// refcountPathForPort returns the file path used for cross-process session counting.
-func refcountPathForPort(port int) string {
-	return filepath.Join(os.TempDir(), fmt.Sprintf(".databricks-codex-sessions-%d", port))
-}
-
-// listenerPort extracts the port from a net.Listener, falling back to the
-// configured port if the listener is nil (e.g., non-owner case).
-func listenerPort(ln net.Listener, fallback int) int {
-	if ln == nil {
-		return fallback
-	}
-	if addr, ok := ln.Addr().(*net.TCPAddr); ok {
-		return addr.Port
-	}
-	return fallback
-}
-
-// proxyHealthy returns true if the proxy on the given port responds to /health.
-func proxyHealthy(port int, scheme string) bool {
-	client := &http.Client{Timeout: 500 * time.Millisecond}
-	if scheme == "https" {
-		client.Transport = &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-		}
-	}
-	resp, err := client.Get(fmt.Sprintf("%s://127.0.0.1:%d/health", scheme, port))
-	if err != nil {
-		return false
-	}
-	resp.Body.Close()
-	return resp.StatusCode == http.StatusOK
-}
-
-// watchProxy polls the proxy health endpoint and takes over the port if the
-// owner process dies. Runs as a goroutine for non-owner sessions.
-func watchProxy(port int, handler http.Handler, tlsCert, tlsKey string) {
-	scheme := "http"
-	if tlsCert != "" && tlsKey != "" {
-		scheme = "https"
-	}
-
-	ticker := time.NewTicker(2 * time.Second)
-	defer ticker.Stop()
-
-	for range ticker.C {
-		if proxyHealthy(port, scheme) {
-			continue
-		}
-
-		// Proxy is unreachable — try to bind the port and take over.
-		ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
-		if err != nil {
-			continue // another session grabbed it first
-		}
-		if _, err := proxy.Serve(ln, handler, tlsCert, tlsKey); err != nil {
-			ln.Close()
-			continue
-		}
-		log.Printf("databricks-codex: proxy owner died, took over on :%d", port)
-		return
-	}
-}
 
 // parseArgs separates databricks-codex flags from codex flags.
 func parseArgs(args []string) (verbose bool, version bool, showHelp bool, printEnv bool, noOtel bool, otelLogsTable string, otelLogsTableSet bool, upstream string, logFile string, profile string, otel bool, proxyAPIKey string, tlsCert string, tlsKey string, model string, modelSet bool, portFlag int, headless bool, idleTimeout time.Duration, installHooksFlag bool, uninstallHooksFlag bool, headlessEnsureFlag bool, noUpdateCheck bool, codexArgs []string) {
@@ -776,25 +643,6 @@ func buildUpdaterConfig() updater.Config {
 	}
 }
 
-// printUpdateNotice checks for a newer release and prints a one-line notice
-// to stderr. The 2-second timeout ensures cold misses don't delay startup.
-func printUpdateNotice(cfg updater.Config) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	r, err := updater.Check(ctx, cfg)
-	if err != nil {
-		log.Printf("databricks-codex: update check: %v", err)
-		return
-	}
-	if !r.UpdateAvailable {
-		return
-	}
-	if r.IsHomebrew {
-		fmt.Fprintf(os.Stderr, "databricks-codex: update available (v%s). Run: brew upgrade databricks-codex\n", r.LatestVersion)
-	} else {
-		fmt.Fprintf(os.Stderr, "databricks-codex: update available (v%s). Run: databricks-codex update\n", r.LatestVersion)
-	}
-}
 
 // handlePrintEnv prints resolved configuration with the token redacted.
 func handlePrintEnv(databricksHost, openaiBaseURL, token, profile, model, otelLogsTable string) {
