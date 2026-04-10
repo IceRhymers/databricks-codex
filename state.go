@@ -14,6 +14,8 @@ type persistentState struct {
 	OtelLogsTable string `json:"otel_logs_table,omitempty"`
 	Model         string `json:"model,omitempty"`
 	Port          int    `json:"port,omitempty"`
+	TLSCert       string `json:"tls_cert,omitempty"`
+	TLSKey        string `json:"tls_key,omitempty"`
 }
 
 const defaultPort = 49154

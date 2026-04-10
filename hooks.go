@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -24,7 +23,14 @@ func headlessEnsure(port int) {
 		return
 	}
 
-	if isProxyHealthy(port) {
+	// Determine scheme from saved TLS config.
+	state := loadState()
+	scheme := "http"
+	if state.TLSCert != "" && state.TLSKey != "" {
+		scheme = "https"
+	}
+
+	if proxyHealthy(port, scheme) {
 		return // already running
 	}
 
@@ -33,7 +39,11 @@ func headlessEnsure(port int) {
 		log.Fatalf("databricks-codex: --headless-ensure: cannot find self: %v", err)
 	}
 
-	cmd := exec.Command(self, "--headless", fmt.Sprintf("--port=%d", port))
+	args := []string{"--headless", fmt.Sprintf("--port=%d", port)}
+	if state.TLSCert != "" && state.TLSKey != "" {
+		args = append(args, fmt.Sprintf("--tls-cert=%s", state.TLSCert), fmt.Sprintf("--tls-key=%s", state.TLSKey))
+	}
+	cmd := exec.Command(self, args...)
 	cmd.Stdout = nil
 	cmd.Stderr = nil
 	if err := cmd.Start(); err != nil {
@@ -46,22 +56,11 @@ func headlessEnsure(port int) {
 	// Poll until healthy or timeout.
 	for i := 0; i < 20; i++ {
 		time.Sleep(500 * time.Millisecond)
-		if isProxyHealthy(port) {
+		if proxyHealthy(port, scheme) {
 			return
 		}
 	}
 	log.Fatalf("databricks-codex: --headless-ensure: proxy did not become healthy within 10s")
-}
-
-// isProxyHealthy returns true if the proxy on port responds to GET /health.
-func isProxyHealthy(port int) bool {
-	client := &http.Client{Timeout: 500 * time.Millisecond}
-	resp, err := client.Get(fmt.Sprintf("http://127.0.0.1:%d/health", port))
-	if err != nil {
-		return false
-	}
-	resp.Body.Close()
-	return resp.StatusCode == http.StatusOK
 }
 
 // installHooks merges the databricks-codex SessionStart and Stop hooks into
