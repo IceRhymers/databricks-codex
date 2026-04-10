@@ -32,6 +32,7 @@ var flagDefs = []completion.FlagDef{
 	{Name: "install-hooks", Description: "Install SessionStart hook into ~/.codex/hooks.json"},
 	{Name: "uninstall-hooks", Description: "Remove databricks-codex hooks from ~/.codex/hooks.json"},
 	{Name: "headless-ensure", Description: "Start proxy if not running — called by the SessionStart hook"},
+	{Name: "no-update-check", Description: "Skip the automatic update check on startup"},
 }
 
 // knownFlags is the set of flag names (with "--" prefix) that databricks-codex

@@ -223,6 +223,50 @@ make test
 make build
 ```
 
+## Automatic Update Check
+
+`databricks-codex` checks for newer releases on startup (once every 24 hours) and prints a one-line notice to stderr when an update is available. The check is synchronous with a 2-second timeout — if GitHub is unreachable it silently skips.
+
+### Update notification
+
+When a newer version exists you'll see:
+
+```
+# Direct install
+databricks-codex: update available (v0.8.0). Run: databricks-codex update
+
+# Homebrew install
+databricks-codex: update available (v0.8.0). Run: brew upgrade databricks-codex
+```
+
+### `update` subcommand
+
+```bash
+databricks-codex update
+```
+
+Force-checks GitHub for the latest release (bypasses the 24-hour cache) and prints upgrade instructions:
+
+| Install method | Output |
+|---|---|
+| Already latest | `databricks-codex v0.7.1 is already the latest version` |
+| Direct install | `Update available: v0.8.0. Download from: https://github.com/...` |
+| Homebrew | `Update available: v0.8.0. Run: brew upgrade databricks-codex` |
+
+No binary is replaced — the command prints instructions only. In-place self-update is planned for a future release.
+
+### Opt out
+
+```bash
+# Per-invocation flag
+databricks-codex --no-update-check
+
+# Per-session or permanent (add to shell profile)
+export DATABRICKS_NO_UPDATE_CHECK=1
+```
+
+Both suppress the startup check and disable the `update` subcommand.
+
 ## License
 
 MIT
