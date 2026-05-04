@@ -44,7 +44,7 @@ Go 1.22, single external module: `github.com/IceRhymers/databricks-claude` (the 
 ### Main Package Files
 
 - **main.go** — CLI entry point: flag parsing (`parseArgs`), profile/otel-logs-table resolution chains, proxy startup, config.toml patching, codex child process lifecycle.
-- **token.go** — `databricksFetcher` implements `tokencache.TokenFetcher` by shelling out to `databricks auth token`. Also `DiscoverHost` (via `databricks auth env`) and `ConstructGatewayURL` (via SCIM `/Me` for workspace ID).
+- **token.go** — `databricksFetcher` implements `tokencache.TokenFetcher` by shelling out to `databricks auth token`. Also `DiscoverHost` (via `databricks auth env`) and `ConstructGatewayURL` (returns `{host}/ai-gateway/openai/v1`, no network call).
 - **config.go** — `ConfigManager` coordinates tomlconfig, filelock, and session registry. `Setup()` backs up + patches config.toml; `Restore()` handles multi-session handoff or full restore.
 - **state.go** — `persistentState` JSON file at `~/.codex/.databricks-codex.json` for profile and otel-logs-table persistence across sessions.
 - **process.go** — Thin shim: `RunCodex` delegates to `childproc.Run`. Declares `otelKeys` for OTEL env var injection.
@@ -56,7 +56,7 @@ Go 1.22, single external module: `github.com/IceRhymers/databricks-claude` (the 
 - **Proxy-based architecture** — Local HTTP proxy on `127.0.0.1:0` injects fresh Bearer tokens. Codex connects via patched `config.toml` with `wire_api = "responses"` for WebSocket support.
 - **Multi-session coordination** — Session registry tracks live PIDs in `~/.codex/.sessions.json`. Last session restores original config; earlier sessions hand off to the most recent survivor.
 - **Resolution chains** — Profile: `--profile` flag > `DATABRICKS_CONFIG_PROFILE` env > saved state > `"DEFAULT"`. OTEL logs table: `--otel-logs-table` flag > saved state > default. Explicit flag values are persisted for future sessions.
-- **Gateway URL** — `https://<workspaceId>.ai-gateway.cloud.databricks.com/openai/v1`. Falls back to `<host>/serving-endpoints/codex/openai/v1` if workspace ID resolution fails.
+- **Gateway URL** — `{host}/ai-gateway/openai/v1` (no fallback — `ConstructGatewayURL` no longer makes a network call).
 - **WebSocket proxy** — Codex v0.118.0+ uses WebSocket for the Responses API. The proxy (in databricks-claude's `pkg/proxy`) detects `Upgrade: websocket` headers and uses HTTP hijacking.
 
 ## Testing Patterns

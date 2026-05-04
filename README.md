@@ -15,11 +15,10 @@ Databricks AI Gateway uses short-lived OAuth tokens. Without this tool, you'd ne
 
 1. Fetches a fresh Databricks OAuth token via `databricks auth token`
 2. Discovers your workspace host from `databricks auth env`
-3. Resolves your workspace ID via the SCIM API
-4. Constructs the Databricks AI Gateway URL
-5. Binds a local proxy on `127.0.0.1:49154` (fixed port — shared across concurrent sessions) that forwards traffic upstream and refreshes the Databricks token automatically
-6. Writes `~/.codex/config.toml` once to point at the proxy (idempotent — no restore on exit)
-7. Exec's `codex` with your args — fully transparent
+3. Constructs the Databricks AI Gateway URL (`{host}/ai-gateway/openai/v1`)
+4. Binds a local proxy on `127.0.0.1:49154` (fixed port — shared across concurrent sessions) that forwards traffic upstream and refreshes the Databricks token automatically
+5. Writes `~/.codex/config.toml` once to point at the proxy (idempotent — no restore on exit)
+6. Exec's `codex` with your args — fully transparent
 
 You use it exactly like `codex`. Every flag and argument is forwarded.
 
@@ -78,7 +77,7 @@ databricks-codex --log-file /tmp/dc.log "fix the bug in main.go"
 databricks-codex -v --log-file /tmp/dc.log "fix the bug in main.go"
 
 # Override upstream URL for the local proxy:
-databricks-codex --upstream https://1234567890123456.ai-gateway.cloud.databricks.com/openai/v1 "summarize this PR"
+databricks-codex --upstream https://adb-123456789.azuredatabricks.net/ai-gateway/openai/v1 "summarize this PR"
 ```
 
 ## Flags
@@ -112,10 +111,7 @@ All other flags and args are forwarded to `codex`.
 On startup, `databricks-codex` auto-discovers:
 
 - Your workspace host from `databricks auth env`
-- Your workspace ID via the SCIM API (`x-databricks-org-id` header)
-- Constructs the AI Gateway URL: `https://<workspaceId>.ai-gateway.cloud.databricks.com/openai/v1`
-
-If workspace ID resolution fails, it falls back to `<host>/serving-endpoints/codex/openai/v1`.
+- Constructs the AI Gateway URL: `{host}/ai-gateway/openai/v1`
 
 ## Debugging
 
@@ -133,7 +129,7 @@ Example output:
 databricks-codex configuration:
   Profile:           DEFAULT
   DATABRICKS_HOST:   https://adb-1234567890123456.7.azuredatabricks.net
-  OPENAI_BASE_URL:   https://1234567890123456.ai-gateway.cloud.databricks.com/openai/v1
+  OPENAI_BASE_URL:   https://adb-1234567890123456.7.azuredatabricks.net/ai-gateway/openai/v1
   Auth Token:        dapi-***
   OpenTelemetry Logs Table:   main.codex_telemetry.codex_otel_logs
   Codex binary:      /usr/local/bin/codex
