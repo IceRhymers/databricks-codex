@@ -4,10 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
-	"net/http"
 	"os/exec"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/IceRhymers/databricks-claude/pkg/tokencache"
@@ -123,43 +122,8 @@ func DiscoverHost(cmdName, profile string) (string, error) {
 	return host, nil
 }
 
-// ResolveWorkspaceID calls the SCIM /Me endpoint and extracts x-databricks-org-id from response headers.
-func ResolveWorkspaceID(host, token string) (string, error) {
-	client := &http.Client{Timeout: 10 * time.Second}
-
-	req, err := http.NewRequest(http.MethodGet, host+"/api/2.0/preview/scim/v2/Me", nil)
-	if err != nil {
-		return "", fmt.Errorf("failed to build SCIM request: %w", err)
-	}
-	req.Header.Set("Authorization", "Bearer "+token)
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("SCIM request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("SCIM request returned status %d", resp.StatusCode)
-	}
-
-	orgID := resp.Header.Get("x-databricks-org-id")
-	if orgID == "" {
-		return "", fmt.Errorf("x-databricks-org-id header not present in SCIM response")
-	}
-	return orgID, nil
-}
-
 // ConstructGatewayURL builds the AI Gateway URL for the Codex proxy endpoint.
-// Format: https://{workspaceId}.ai-gateway.cloud.databricks.com/openai/v1
-// Fallback: {host}/serving-endpoints/codex/openai/v1
-func ConstructGatewayURL(host, token string) string {
-	workspaceID, err := ResolveWorkspaceID(host, token)
-	if err != nil {
-		log.Printf("workspace ID resolution failed: %v", err)
-		return host + "/serving-endpoints/codex/openai/v1"
-	}
-	gatewayURL := "https://" + workspaceID + ".ai-gateway.cloud.databricks.com/openai/v1"
-	log.Printf("resolved workspace ID %s, using gateway URL: %s", workspaceID, gatewayURL)
-	return gatewayURL
+// Format: {host}/ai-gateway/openai/v1
+func ConstructGatewayURL(host string) string {
+	return strings.TrimRight(host, "/") + "/ai-gateway/openai/v1"
 }
