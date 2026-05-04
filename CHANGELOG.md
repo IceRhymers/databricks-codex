@@ -5,7 +5,7 @@
 
 ### Features
 
-* require conventional commit prefix in agent instructions ([9cd01ea](https://github.com/IceRhymers/databricks-codex/commit/9cd01ea5546268ec9886c31e43cfaa7985fb8e03))
+* simplify `ConstructGatewayURL`: use host-relative AI Gateway path (`{host}/ai-gateway/openai/v1`), removing SCIM workspace-ID lookup, token parameter, and fallback ([#66](https://github.com/IceRhymers/databricks-codex/issues/66)) ([3c54e3a](https://github.com/IceRhymers/databricks-codex/commit/3c54e3a61612df3bfed8b4136ccb0e7c68d422d6))
 * require conventional commit prefix in agent instructions ([fc9d5e2](https://github.com/IceRhymers/databricks-codex/commit/fc9d5e295183600ca4f014114a86cc229ec16b50))
 
 ## [0.8.0](https://github.com/IceRhymers/databricks-codex/compare/v0.7.1...v0.8.0) (2026-04-10)
