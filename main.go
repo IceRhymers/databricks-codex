@@ -170,7 +170,7 @@ func main() {
 	log.Printf("databricks-codex: using model: %s", model)
 
 	// --- Ensure the user is authenticated before proceeding ---
-	if err := authcheck.EnsureAuthenticated(profile, "codex"); err != nil {
+	if err := authcheck.EnsureAuthenticated(profile, ""); err != nil {
 		log.Fatalf("databricks-codex: auth failed: %v", err)
 	}
 
