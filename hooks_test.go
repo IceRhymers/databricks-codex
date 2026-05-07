@@ -152,6 +152,115 @@ func TestUninstallHooks_NoFile(t *testing.T) {
 	}
 }
 
+// TestAtomicWriteFile_NoTmpDebris verifies the helper leaves no temp file
+// behind after a successful write.
+func TestAtomicWriteFile_NoTmpDebris(t *testing.T) {
+	dir := t.TempDir()
+	dest := filepath.Join(dir, "hooks.json")
+
+	if err := atomicWriteFile(dest, []byte(`{"ok":true}`), 0o600); err != nil {
+		t.Fatalf("atomicWriteFile: %v", err)
+	}
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("ReadDir: %v", err)
+	}
+	for _, e := range entries {
+		name := e.Name()
+		if name == "hooks.json" {
+			continue
+		}
+		t.Errorf("unexpected leftover file in dir: %s", name)
+	}
+
+	// Permissions preserved.
+	info, err := os.Stat(dest)
+	if err != nil {
+		t.Fatalf("stat: %v", err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Errorf("expected 0o600 perms, got %v", info.Mode().Perm())
+	}
+}
+
+// TestAtomicWriteFile_PreservesOriginalOnRenameFailure verifies that if the
+// rename fails (simulated by making the destination a directory), the
+// original file at the destination path is untouched and no temp debris
+// is left behind.
+func TestAtomicWriteFile_PreservesOriginalOnFailure(t *testing.T) {
+	dir := t.TempDir()
+	// Create a directory at the destination path — os.Rename of a regular
+	// file onto an existing non-empty directory fails on Linux, simulating
+	// a write failure mid-operation.
+	dest := filepath.Join(dir, "hooks.json")
+	if err := os.Mkdir(dest, 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	// Put a file inside so the dir is non-empty (rename will fail).
+	if err := os.WriteFile(filepath.Join(dest, "marker"), []byte("orig"), 0o600); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	err := atomicWriteFile(dest, []byte("new content"), 0o600)
+	if err == nil {
+		t.Fatal("expected atomicWriteFile to fail when dest is a non-empty dir")
+	}
+
+	// The directory and its contents must still be intact.
+	got, err := os.ReadFile(filepath.Join(dest, "marker"))
+	if err != nil {
+		t.Fatalf("original marker missing after failed write: %v", err)
+	}
+	if string(got) != "orig" {
+		t.Errorf("original content corrupted: got %q", got)
+	}
+
+	// No .tmp debris left in dir.
+	entries, _ := os.ReadDir(dir)
+	for _, e := range entries {
+		if e.Name() == "hooks.json" {
+			continue
+		}
+		t.Errorf("unexpected leftover file: %s", e.Name())
+	}
+}
+
+// TestWriteHooksDoc_AtomicReplace verifies writeHooksDoc replaces an existing
+// file without leaving temp debris and preserves the new content.
+func TestWriteHooksDoc_AtomicReplace(t *testing.T) {
+	dir := t.TempDir()
+	hooksPath := filepath.Join(dir, "hooks.json")
+
+	// Seed with original content.
+	if err := writeHooksDoc(hooksPath, map[string]interface{}{"v": float64(1)}); err != nil {
+		t.Fatalf("seed write: %v", err)
+	}
+
+	// Overwrite.
+	if err := writeHooksDoc(hooksPath, map[string]interface{}{"v": float64(2)}); err != nil {
+		t.Fatalf("rewrite: %v", err)
+	}
+
+	data, _ := os.ReadFile(hooksPath)
+	var doc map[string]interface{}
+	if err := json.Unmarshal(data, &doc); err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if doc["v"].(float64) != 2 {
+		t.Errorf("expected v=2 after atomic replace, got %v", doc["v"])
+	}
+
+	// No .tmp debris.
+	entries, _ := os.ReadDir(dir)
+	for _, e := range entries {
+		if e.Name() == "hooks.json" {
+			continue
+		}
+		t.Errorf("unexpected leftover: %s", e.Name())
+	}
+}
+
 // TestIsDBXHookEntry verifies detection of databricks-codex hook entries.
 func TestIsDBXHookEntry(t *testing.T) {
 	tests := []struct {
