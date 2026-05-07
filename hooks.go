@@ -160,13 +160,55 @@ func writeHooksDoc(path string, doc map[string]interface{}) error {
 		return fmt.Errorf("marshalling hooks: %w", err)
 	}
 	data = append(data, '\n')
-	return os.WriteFile(path, data, 0o600)
+	return atomicWriteFile(path, data, 0o600)
+}
+
+// atomicWriteFile writes data to a temp file in the same directory as path,
+// then renames it into place. This prevents partial-write
+// corruption from concurrent invocations or crashes mid-write. The temp file
+// is created in the destination directory so the rename is atomic on the same
+// filesystem.
+func atomicWriteFile(path string, data []byte, perm os.FileMode) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(dir, ".hooks-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	if err := os.Chmod(tmpPath, perm); err != nil {
+		tmp.Close()
+		os.Remove(tmpPath)
+		return err
+	}
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		os.Remove(tmpPath)
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmpPath)
+		return err
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		os.Remove(tmpPath)
+		return err
+	}
+	return nil
 }
 
 // ensureHooksFeatureFlag ensures config.toml contains codex_hooks = true
 // inside a [features] section. Surgical: if the key already exists it's a
 // no-op; if [features] exists the key is appended inside it; otherwise a
 // new section is appended at the end.
+//
+// TODO(#72 follow-up): This writes directly to the same config.toml that
+// tomlconfig.Manager owns, bypassing the manager's backup/restore bookkeeping.
+// There is a TOCTOU window if a session is patching config.toml concurrently.
+// Routing this through tomlconfig.Manager is out of scope for the atomic-write
+// fix and tracked as a separate follow-up.
 func ensureHooksFeatureFlag(configPath string) error {
 	data, err := os.ReadFile(configPath)
 	if err != nil && !os.IsNotExist(err) {
@@ -203,5 +245,5 @@ func ensureHooksFeatureFlag(configPath string) error {
 	if err := os.MkdirAll(filepath.Dir(configPath), 0o700); err != nil {
 		return fmt.Errorf("creating config dir: %w", err)
 	}
-	return os.WriteFile(configPath, []byte(content), 0o600)
+	return atomicWriteFile(configPath, []byte(content), 0o600)
 }
