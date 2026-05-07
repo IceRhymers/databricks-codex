@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.10.0](https://github.com/IceRhymers/databricks-codex/compare/v0.9.0...v0.10.0) (2026-05-07)
+
+
+### Features
+
+* phase 2 — parseArgs struct, strict --idle-timeout, broadened redaction ([1ae04ec](https://github.com/IceRhymers/databricks-codex/commit/1ae04ec70dc3a78655769ddbea72cb905bc44a99))
+
+
+### Bug Fixes
+
+* atomic file writes in hooks.go ([996cc5b](https://github.com/IceRhymers/databricks-codex/commit/996cc5b17fa00608a76365ffb6dc8cc19988c5a8)), closes [#72](https://github.com/IceRhymers/databricks-codex/issues/72)
+* pass empty cmdName to authcheck.EnsureAuthenticated ([9849546](https://github.com/IceRhymers/databricks-codex/commit/9849546cd78dbd4be8bb8439e90264c4d8486b56))
+
 ## [0.9.0](https://github.com/IceRhymers/databricks-codex/compare/v0.8.0...v0.9.0) (2026-05-04)
 
 
