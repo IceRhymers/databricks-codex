@@ -17,13 +17,13 @@ import (
 //
 // The proxy shuts itself down via idle timeout — there is no corresponding
 // release hook because Codex CLI has no session-end event.
-func headlessEnsure(port int) {
+func headlessEnsure(port int) error {
 	s := loadState()
 	scheme := "http"
 	if s.TLSCert != "" {
 		scheme = "https"
 	}
-	headless.Ensure(headless.Config{
+	return headless.Ensure(headless.Config{
 		Port:          port,
 		Scheme:        scheme,
 		TLSCert:       s.TLSCert,

@@ -101,7 +101,9 @@ func main() {
 	if headlessEnsureFlag {
 		state := loadState()
 		port := resolvePort(portFlag, state)
-		headlessEnsure(port)
+		if err := headlessEnsure(port); err != nil {
+			log.Fatalf("databricks-codex: headless ensure failed: %v", err)
+		}
 		os.Exit(0)
 	}
 
@@ -168,7 +170,7 @@ func main() {
 	log.Printf("databricks-codex: using model: %s", model)
 
 	// --- Ensure the user is authenticated before proceeding ---
-	if err := authcheck.EnsureAuthenticated(profile); err != nil {
+	if err := authcheck.EnsureAuthenticated(profile, ""); err != nil {
 		log.Fatalf("databricks-codex: auth failed: %v", err)
 	}
 
@@ -284,7 +286,7 @@ func main() {
 	if proxyAPIKey != "" {
 		fmt.Fprintln(os.Stderr, "databricks-codex: proxy API key authentication enabled")
 	}
-	proxyHandler := NewProxyServer(&ProxyConfig{
+	proxyHandler, err := NewProxyServer(&ProxyConfig{
 		InferenceUpstream: gatewayURL,
 		OTELUpstream:      otelUpstream,
 		UCLogsTable:       otelLogsTable,
@@ -296,6 +298,9 @@ func main() {
 		ToolName:          "databricks-codex",
 		Version:           Version,
 	})
+	if err != nil {
+		log.Fatalf("databricks-codex: failed to create proxy: %v", err)
+	}
 
 	// --- Reference counting ---
 	// In wrapper mode, the parent process acquires here and releases on exit.
@@ -335,7 +340,7 @@ func main() {
 	} else {
 		log.Printf("databricks-codex: joining existing proxy on :%d", port)
 		// Watch for owner death and take over the proxy if needed.
-		go health.WatchProxy(port, proxyHandler, tlsCert, tlsKey, "databricks-codex")
+		go health.WatchProxy(port, proxyHandler, tlsCert, tlsKey, "databricks-codex", nil)
 	}
 	log.Printf("databricks-codex: proxy on %s (owner=%v)", proxyURL, isOwner)
 
