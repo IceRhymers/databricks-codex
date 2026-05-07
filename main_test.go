@@ -9,419 +9,361 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
+
+// mustParseArgs is a test helper that calls parseArgs and fails the test on error.
+func mustParseArgs(t *testing.T, args []string) *Args {
+	t.Helper()
+	a, err := parseArgs(args)
+	if err != nil {
+		t.Fatalf("parseArgs(%v) returned unexpected error: %v", args, err)
+	}
+	return a
+}
 
 // --- parseArgs tests ---
 
 func TestParseArgs_HelpLong(t *testing.T) {
-	verbose, version, showHelp, printEnv, noOtel, _, _, upstream, logFile, profile, otel, _, _, _, _, _, _, _, _, _, _, _, _, codexArgs := parseArgs([]string{"--help"})
-	if !showHelp {
-		t.Error("expected showHelp=true for --help")
+	a := mustParseArgs(t, []string{"--help"})
+	if !a.ShowHelp {
+		t.Error("expected ShowHelp=true for --help")
 	}
-	if verbose || version || printEnv || noOtel || otel || upstream != "" || logFile != "" || profile != "" || len(codexArgs) != 0 {
+	if a.Verbose || a.Version || a.PrintEnv || a.NoOtel || a.Otel || a.Upstream != "" || a.LogFile != "" || a.Profile != "" || len(a.CodexArgs) != 0 {
 		t.Error("unexpected non-default values alongside --help")
 	}
 }
 
 func TestParseArgs_HelpShort(t *testing.T) {
-	_, _, showHelp, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _ := parseArgs([]string{"-h"})
-	if !showHelp {
-		t.Error("expected showHelp=true for -h")
+	a := mustParseArgs(t, []string{"-h"})
+	if !a.ShowHelp {
+		t.Error("expected ShowHelp=true for -h")
 	}
 }
 
 func TestParseArgs_PrintEnv(t *testing.T) {
-	_, _, _, printEnv, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _ := parseArgs([]string{"--print-env"})
-	if !printEnv {
-		t.Error("expected printEnv=true for --print-env")
+	a := mustParseArgs(t, []string{"--print-env"})
+	if !a.PrintEnv {
+		t.Error("expected PrintEnv=true for --print-env")
 	}
 }
 
 func TestParseArgs_Version(t *testing.T) {
-	_, version, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _ := parseArgs([]string{"--version"})
-	if !version {
-		t.Error("expected version=true for --version")
+	a := mustParseArgs(t, []string{"--version"})
+	if !a.Version {
+		t.Error("expected Version=true for --version")
 	}
 }
 
 func TestParseArgs_Verbose(t *testing.T) {
-	verbose, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _ := parseArgs([]string{"--verbose"})
-	if !verbose {
-		t.Error("expected verbose=true for --verbose")
+	a := mustParseArgs(t, []string{"--verbose"})
+	if !a.Verbose {
+		t.Error("expected Verbose=true for --verbose")
 	}
 }
 
 func TestParseArgs_VerboseShort(t *testing.T) {
-	verbose, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _ := parseArgs([]string{"-v"})
-	if !verbose {
-		t.Error("expected verbose=true for -v")
+	a := mustParseArgs(t, []string{"-v"})
+	if !a.Verbose {
+		t.Error("expected Verbose=true for -v")
 	}
 }
 
 func TestParseArgs_LogFile(t *testing.T) {
-	_, _, _, _, _, _, _, _, logFile, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _ := parseArgs([]string{"--log-file", "/tmp/test.log"})
-	if logFile != "/tmp/test.log" {
-		t.Errorf("expected logFile=%q, got %q", "/tmp/test.log", logFile)
+	a := mustParseArgs(t, []string{"--log-file", "/tmp/test.log"})
+	if a.LogFile != "/tmp/test.log" {
+		t.Errorf("expected LogFile=%q, got %q", "/tmp/test.log", a.LogFile)
 	}
 }
 
 func TestParseArgs_LogFileEquals(t *testing.T) {
-	_, _, _, _, _, _, _, _, logFile, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _ := parseArgs([]string{"--log-file=/tmp/test.log"})
-	if logFile != "/tmp/test.log" {
-		t.Errorf("expected logFile=%q, got %q", "/tmp/test.log", logFile)
+	a := mustParseArgs(t, []string{"--log-file=/tmp/test.log"})
+	if a.LogFile != "/tmp/test.log" {
+		t.Errorf("expected LogFile=%q, got %q", "/tmp/test.log", a.LogFile)
 	}
 }
 
 func TestParseArgs_Upstream(t *testing.T) {
-	_, _, _, _, _, _, _, upstream, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _ := parseArgs([]string{"--upstream", "https://gw.example.com/openai/v1"})
-	if upstream != "https://gw.example.com/openai/v1" {
-		t.Errorf("expected upstream=%q, got %q", "https://gw.example.com/openai/v1", upstream)
+	a := mustParseArgs(t, []string{"--upstream", "https://gw.example.com/openai/v1"})
+	if a.Upstream != "https://gw.example.com/openai/v1" {
+		t.Errorf("expected Upstream=%q, got %q", "https://gw.example.com/openai/v1", a.Upstream)
 	}
 }
 
 func TestParseArgs_UpstreamEquals(t *testing.T) {
-	_, _, _, _, _, _, _, upstream, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _ := parseArgs([]string{"--upstream=https://gw.example.com/openai/v1"})
-	if upstream != "https://gw.example.com/openai/v1" {
-		t.Errorf("expected upstream=%q, got %q", "https://gw.example.com/openai/v1", upstream)
+	a := mustParseArgs(t, []string{"--upstream=https://gw.example.com/openai/v1"})
+	if a.Upstream != "https://gw.example.com/openai/v1" {
+		t.Errorf("expected Upstream=%q, got %q", "https://gw.example.com/openai/v1", a.Upstream)
 	}
 }
 
 func TestParseArgs_NoOtel(t *testing.T) {
-	_, _, _, _, noOtel, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, codexArgs := parseArgs([]string{"--no-otel"})
-	if !noOtel {
-		t.Error("expected noOtel=true for --no-otel")
+	a := mustParseArgs(t, []string{"--no-otel"})
+	if !a.NoOtel {
+		t.Error("expected NoOtel=true for --no-otel")
 	}
-	if len(codexArgs) != 0 {
-		t.Errorf("expected no codexArgs, got %v", codexArgs)
+	if len(a.CodexArgs) != 0 {
+		t.Errorf("expected no CodexArgs, got %v", a.CodexArgs)
 	}
 }
 
 func TestParseArgs_OtelLogsTable(t *testing.T) {
-	_, _, _, _, _, otelLogsTable, otelLogsTableSet, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _ := parseArgs([]string{"--otel-logs-table", "main.custom.logs"})
-	if !otelLogsTableSet {
-		t.Error("expected otelLogsTableSet=true when --otel-logs-table is passed")
+	a := mustParseArgs(t, []string{"--otel-logs-table", "main.custom.logs"})
+	if !a.OtelLogsTableSet {
+		t.Error("expected OtelLogsTableSet=true when --otel-logs-table is passed")
 	}
-	if otelLogsTable != "main.custom.logs" {
-		t.Errorf("expected otelLogsTable=%q, got %q", "main.custom.logs", otelLogsTable)
+	if a.OtelLogsTable != "main.custom.logs" {
+		t.Errorf("expected OtelLogsTable=%q, got %q", "main.custom.logs", a.OtelLogsTable)
 	}
 }
+
 func TestParseArgs_OtelLogsTableDefault(t *testing.T) {
-	_, _, _, _, _, otelLogsTable, otelLogsTableSet, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _ := parseArgs([]string{})
-	if otelLogsTableSet {
-		t.Error("expected otelLogsTableSet=false when --otel-logs-table is not passed")
+	a := mustParseArgs(t, []string{})
+	if a.OtelLogsTableSet {
+		t.Error("expected OtelLogsTableSet=false when --otel-logs-table is not passed")
 	}
-	_ = otelLogsTable // default applied in main(), not parseArgs
+	_ = a.OtelLogsTable
 }
 
 func TestParseArgs_UnknownFlagPassthrough(t *testing.T) {
-	_, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, codexArgs := parseArgs([]string{"--unknown"})
-	if len(codexArgs) != 1 || codexArgs[0] != "--unknown" {
-		t.Errorf("expected codexArgs=[\"--unknown\"], got %v", codexArgs)
+	a := mustParseArgs(t, []string{"--unknown"})
+	if len(a.CodexArgs) != 1 || a.CodexArgs[0] != "--unknown" {
+		t.Errorf("expected CodexArgs=[\"--unknown\"], got %v", a.CodexArgs)
 	}
 }
 
 func TestParseArgs_EmptyArgs(t *testing.T) {
-	verbose, version, showHelp, printEnv, noOtel, _, _, upstream, logFile, profile, otel, _, _, _, _, _, _, _, _, _, _, _, _, codexArgs := parseArgs([]string{})
-	if verbose || version || showHelp || printEnv || noOtel || otel {
+	a := mustParseArgs(t, []string{})
+	if a.Verbose || a.Version || a.ShowHelp || a.PrintEnv || a.NoOtel || a.Otel {
 		t.Error("expected all bool flags false for empty args")
 	}
-	if upstream != "" {
-		t.Errorf("expected empty upstream, got %q", upstream)
+	if a.Upstream != "" {
+		t.Errorf("expected empty Upstream, got %q", a.Upstream)
 	}
-	if logFile != "" {
-		t.Errorf("expected empty logFile, got %q", logFile)
+	if a.LogFile != "" {
+		t.Errorf("expected empty LogFile, got %q", a.LogFile)
 	}
-	if profile != "" {
-		t.Errorf("expected empty profile, got %q", profile)
+	if a.Profile != "" {
+		t.Errorf("expected empty Profile, got %q", a.Profile)
 	}
-	if len(codexArgs) != 0 {
-		t.Errorf("expected no codexArgs, got %v", codexArgs)
+	if len(a.CodexArgs) != 0 {
+		t.Errorf("expected no CodexArgs, got %v", a.CodexArgs)
+	}
+	if a.IdleTimeout != 30*time.Minute {
+		t.Errorf("expected default IdleTimeout=30m, got %v", a.IdleTimeout)
 	}
 }
 
 func TestParseArgs_Mixed(t *testing.T) {
-	verbose, _, showHelp, _, _, _, _, upstream, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _ := parseArgs([]string{"--verbose", "--upstream", "https://gw.example.com", "--help"})
-	if !showHelp {
-		t.Error("expected showHelp=true")
+	a := mustParseArgs(t, []string{"--verbose", "--upstream", "https://gw.example.com", "--help"})
+	if !a.ShowHelp {
+		t.Error("expected ShowHelp=true")
 	}
-	if !verbose {
-		t.Error("expected verbose=true")
+	if !a.Verbose {
+		t.Error("expected Verbose=true")
 	}
-	if upstream != "https://gw.example.com" {
-		t.Errorf("expected upstream=%q, got %q", "https://gw.example.com", upstream)
+	if a.Upstream != "https://gw.example.com" {
+		t.Errorf("expected Upstream=%q, got %q", "https://gw.example.com", a.Upstream)
 	}
 }
 
 func TestParseArgs_Separator(t *testing.T) {
-	verbose, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, codexArgs := parseArgs([]string{"--verbose", "--", "--unknown", "arg1"})
-	if !verbose {
-		t.Error("expected verbose=true before separator")
+	a := mustParseArgs(t, []string{"--verbose", "--", "--unknown", "arg1"})
+	if !a.Verbose {
+		t.Error("expected Verbose=true before separator")
 	}
-	if len(codexArgs) != 2 || codexArgs[0] != "--unknown" || codexArgs[1] != "arg1" {
-		t.Errorf("expected codexArgs=[\"--unknown\", \"arg1\"], got %v", codexArgs)
+	if len(a.CodexArgs) != 2 || a.CodexArgs[0] != "--unknown" || a.CodexArgs[1] != "arg1" {
+		t.Errorf("expected CodexArgs=[\"--unknown\", \"arg1\"], got %v", a.CodexArgs)
 	}
 }
 
 func TestParseArgs_PassthroughArgs(t *testing.T) {
-	_, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, codexArgs := parseArgs([]string{"prompt text", "--unknown-flag", "gpt-4"})
-	if len(codexArgs) != 3 {
-		t.Errorf("expected 3 codexArgs, got %d: %v", len(codexArgs), codexArgs)
+	a := mustParseArgs(t, []string{"prompt text", "--unknown-flag", "gpt-4"})
+	if len(a.CodexArgs) != 3 {
+		t.Errorf("expected 3 CodexArgs, got %d: %v", len(a.CodexArgs), a.CodexArgs)
 	}
 }
 
 // --- Model flag tests ---
 
 func TestParseArgs_Model(t *testing.T) {
-	_, _, _, _, _, _, _, _, _, _, _, _, _, _, model, modelSet, _, _, _, _, _, _, _, _ := parseArgs([]string{"--model", "databricks-gpt-5-4-mini"})
-	if !modelSet {
-		t.Error("expected modelSet=true when --model is passed")
+	a := mustParseArgs(t, []string{"--model", "databricks-gpt-5-4-mini"})
+	if !a.ModelSet {
+		t.Error("expected ModelSet=true when --model is passed")
 	}
-	if model != "databricks-gpt-5-4-mini" {
-		t.Errorf("expected model=%q, got %q", "databricks-gpt-5-4-mini", model)
+	if a.Model != "databricks-gpt-5-4-mini" {
+		t.Errorf("expected Model=%q, got %q", "databricks-gpt-5-4-mini", a.Model)
 	}
 }
 
 func TestParseArgs_ModelEquals(t *testing.T) {
-	_, _, _, _, _, _, _, _, _, _, _, _, _, _, model, modelSet, _, _, _, _, _, _, _, _ := parseArgs([]string{"--model=custom-model"})
-	if !modelSet {
-		t.Error("expected modelSet=true when --model=value is passed")
+	a := mustParseArgs(t, []string{"--model=custom-model"})
+	if !a.ModelSet {
+		t.Error("expected ModelSet=true when --model=value is passed")
 	}
-	if model != "custom-model" {
-		t.Errorf("expected model=%q, got %q", "custom-model", model)
+	if a.Model != "custom-model" {
+		t.Errorf("expected Model=%q, got %q", "custom-model", a.Model)
 	}
 }
 
 func TestParseArgs_ModelDefault(t *testing.T) {
-	_, _, _, _, _, _, _, _, _, _, _, _, _, _, model, modelSet, _, _, _, _, _, _, _, _ := parseArgs([]string{})
-	if modelSet {
-		t.Error("expected modelSet=false when --model is not passed")
+	a := mustParseArgs(t, []string{})
+	if a.ModelSet {
+		t.Error("expected ModelSet=false when --model is not passed")
 	}
-	if model != "" {
-		t.Errorf("expected empty model from parseArgs, got %q", model)
+	if a.Model != "" {
+		t.Errorf("expected empty Model from parseArgs, got %q", a.Model)
 	}
 }
 
 func TestParseArgs_ModelNotPassedThrough(t *testing.T) {
-	_, _, _, _, _, _, _, _, _, _, _, _, _, _, model, modelSet, _, _, _, _, _, _, _, codexArgs := parseArgs([]string{"--model", "my-model", "prompt"})
-	if !modelSet {
-		t.Error("expected modelSet=true")
+	a := mustParseArgs(t, []string{"--model", "my-model", "prompt"})
+	if !a.ModelSet {
+		t.Error("expected ModelSet=true")
 	}
-	if model != "my-model" {
-		t.Errorf("expected model=%q, got %q", "my-model", model)
+	if a.Model != "my-model" {
+		t.Errorf("expected Model=%q, got %q", "my-model", a.Model)
 	}
-	if len(codexArgs) != 1 || codexArgs[0] != "prompt" {
-		t.Errorf("expected codexArgs=[\"prompt\"], got %v", codexArgs)
+	if len(a.CodexArgs) != 1 || a.CodexArgs[0] != "prompt" {
+		t.Errorf("expected CodexArgs=[\"prompt\"], got %v", a.CodexArgs)
+	}
+}
+
+// --- --idle-timeout strict parsing tests ---
+
+func TestParseArgs_IdleTimeout_Seconds(t *testing.T) {
+	a := mustParseArgs(t, []string{"--idle-timeout", "30s"})
+	if a.IdleTimeout != 30*time.Second {
+		t.Errorf("expected 30s, got %v", a.IdleTimeout)
+	}
+}
+
+func TestParseArgs_IdleTimeout_Minutes(t *testing.T) {
+	a := mustParseArgs(t, []string{"--idle-timeout", "5m"})
+	if a.IdleTimeout != 5*time.Minute {
+		t.Errorf("expected 5m, got %v", a.IdleTimeout)
+	}
+}
+
+func TestParseArgs_IdleTimeout_Hours(t *testing.T) {
+	a := mustParseArgs(t, []string{"--idle-timeout", "1h"})
+	if a.IdleTimeout != time.Hour {
+		t.Errorf("expected 1h, got %v", a.IdleTimeout)
+	}
+}
+
+func TestParseArgs_IdleTimeout_Equals(t *testing.T) {
+	a := mustParseArgs(t, []string{"--idle-timeout=2h30m"})
+	if a.IdleTimeout != 2*time.Hour+30*time.Minute {
+		t.Errorf("expected 2h30m, got %v", a.IdleTimeout)
+	}
+}
+
+func TestParseArgs_IdleTimeout_BareIntRejected(t *testing.T) {
+	if _, err := parseArgs([]string{"--idle-timeout", "30"}); err == nil {
+		t.Error("expected error for bare int --idle-timeout, got nil")
+	}
+}
+
+func TestParseArgs_IdleTimeout_GarbageRejected(t *testing.T) {
+	if _, err := parseArgs([]string{"--idle-timeout", "30mins"}); err == nil {
+		t.Error("expected error for '30mins' --idle-timeout, got nil")
+	}
+}
+
+func TestParseArgs_IdleTimeout_EmptyRejected(t *testing.T) {
+	if _, err := parseArgs([]string{"--idle-timeout="}); err == nil {
+		t.Error("expected error for empty --idle-timeout, got nil")
 	}
 }
 
 // Table-driven comprehensive test for parseArgs.
 func TestParseArgs_Table(t *testing.T) {
-	type result struct {
-		verbose            bool
-		version            bool
-		showHelp           bool
-		printEnv           bool
-		noOtel             bool
-		upstream           string
-		logFile            string
-		profile            string
-		otel               bool
-		model              string
-		modelSet           bool
-		portFlag           int
-		headless           bool
-		installHooks       bool
-		uninstallHooks     bool
-		headlessEnsure     bool
-		codexLen           int
-	}
-
 	tests := []struct {
 		name string
 		args []string
-		want result
+		want Args
 	}{
-		{
-			name: "--help sets showHelp",
-			args: []string{"--help"},
-			want: result{showHelp: true},
-		},
-		{
-			name: "-h sets showHelp",
-			args: []string{"-h"},
-			want: result{showHelp: true},
-		},
-		{
-			name: "--print-env sets printEnv",
-			args: []string{"--print-env"},
-			want: result{printEnv: true},
-		},
-		{
-			name: "--version sets version",
-			args: []string{"--version"},
-			want: result{version: true},
-		},
-		{
-			name: "--verbose sets verbose",
-			args: []string{"--verbose"},
-			want: result{verbose: true},
-		},
-		{
-			name: "-v sets verbose",
-			args: []string{"-v"},
-			want: result{verbose: true},
-		},
-		{
-			name: "--log-file sets logFile",
-			args: []string{"--log-file", "/tmp/test.log"},
-			want: result{logFile: "/tmp/test.log"},
-		},
-		{
-			name: "--log-file=value sets logFile",
-			args: []string{"--log-file=/tmp/test.log"},
-			want: result{logFile: "/tmp/test.log"},
-		},
-		{
-			name: "--upstream sets upstream",
-			args: []string{"--upstream", "https://gw.example.com"},
-			want: result{upstream: "https://gw.example.com"},
-		},
-		{
-			name: "--no-otel sets noOtel",
-			args: []string{"--no-otel"},
-			want: result{noOtel: true},
-		},
-		{
-			name: "unknown flag passes through",
-			args: []string{"--unknown"},
-			want: result{codexLen: 1},
-		},
-		{
-			name: "empty args all defaults",
-			args: []string{},
-			want: result{},
-		},
-		{
-			name: "mixed flags: verbose, upstream, help",
-			args: []string{"--verbose", "--upstream", "https://gw.example.com", "--help"},
-			want: result{showHelp: true, verbose: true, upstream: "https://gw.example.com"},
-		},
-		{
-			name: "--profile sets profile",
-			args: []string{"--profile", "aidev"},
-			want: result{profile: "aidev"},
-		},
-		{
-			name: "--profile=value sets profile",
-			args: []string{"--profile=aidev"},
-			want: result{profile: "aidev"},
-		},
-		{
-			name: "--otel sets otel",
-			args: []string{"--otel"},
-			want: result{otel: true},
-		},
-		{
-			name: "--otel and --no-otel both parsed",
-			args: []string{"--otel", "--no-otel"},
-			want: result{otel: true, noOtel: true},
-		},
-		{
-			name: "--model sets model",
-			args: []string{"--model", "my-model"},
-			want: result{model: "my-model", modelSet: true},
-		},
-		{
-			name: "--model=value sets model",
-			args: []string{"--model=my-model"},
-			want: result{model: "my-model", modelSet: true},
-		},
-		{
-			name: "--port sets portFlag",
-			args: []string{"--port", "9999"},
-			want: result{portFlag: 9999},
-		},
-		{
-			name: "--port=value sets portFlag",
-			args: []string{"--port=8080"},
-			want: result{portFlag: 8080},
-		},
-		{
-			name: "--headless sets headless",
-			args: []string{"--headless"},
-			want: result{headless: true},
-		},
-		{
-			name: "--install-hooks sets installHooks",
-			args: []string{"--install-hooks"},
-			want: result{installHooks: true},
-		},
-		{
-			name: "--uninstall-hooks sets uninstallHooks",
-			args: []string{"--uninstall-hooks"},
-			want: result{uninstallHooks: true},
-		},
-		{
-			name: "--headless-ensure sets headlessEnsure",
-			args: []string{"--headless-ensure"},
-			want: result{headlessEnsure: true},
-		},
+		{name: "--help sets showHelp", args: []string{"--help"}, want: Args{ShowHelp: true}},
+		{name: "-h sets showHelp", args: []string{"-h"}, want: Args{ShowHelp: true}},
+		{name: "--print-env sets printEnv", args: []string{"--print-env"}, want: Args{PrintEnv: true}},
+		{name: "--version sets version", args: []string{"--version"}, want: Args{Version: true}},
+		{name: "--verbose sets verbose", args: []string{"--verbose"}, want: Args{Verbose: true}},
+		{name: "-v sets verbose", args: []string{"-v"}, want: Args{Verbose: true}},
+		{name: "--log-file sets logFile", args: []string{"--log-file", "/tmp/test.log"}, want: Args{LogFile: "/tmp/test.log"}},
+		{name: "--log-file=value", args: []string{"--log-file=/tmp/test.log"}, want: Args{LogFile: "/tmp/test.log"}},
+		{name: "--upstream sets upstream", args: []string{"--upstream", "https://gw.example.com"}, want: Args{Upstream: "https://gw.example.com"}},
+		{name: "--no-otel sets noOtel", args: []string{"--no-otel"}, want: Args{NoOtel: true}},
+		{name: "empty args all defaults", args: []string{}, want: Args{}},
+		{name: "--profile", args: []string{"--profile", "aidev"}, want: Args{Profile: "aidev"}},
+		{name: "--profile=value", args: []string{"--profile=aidev"}, want: Args{Profile: "aidev"}},
+		{name: "--otel", args: []string{"--otel"}, want: Args{Otel: true}},
+		{name: "--otel and --no-otel", args: []string{"--otel", "--no-otel"}, want: Args{Otel: true, NoOtel: true}},
+		{name: "--model", args: []string{"--model", "my-model"}, want: Args{Model: "my-model", ModelSet: true}},
+		{name: "--port", args: []string{"--port", "9999"}, want: Args{PortFlag: 9999}},
+		{name: "--headless", args: []string{"--headless"}, want: Args{Headless: true}},
+		{name: "--install-hooks", args: []string{"--install-hooks"}, want: Args{InstallHooksFlag: true}},
+		{name: "--uninstall-hooks", args: []string{"--uninstall-hooks"}, want: Args{UninstallHooksFlag: true}},
+		{name: "--headless-ensure", args: []string{"--headless-ensure"}, want: Args{HeadlessEnsureFlag: true}},
+		{name: "--no-update-check", args: []string{"--no-update-check"}, want: Args{NoUpdateCheck: true}},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			verbose, version, showHelp, printEnv, noOtel, _, _, upstream, logFile, profile, otel, _, _, _, model, modelSet, portFlag, headless, _, installHooks, uninstallHooks, headlessEnsure, _, codexArgs := parseArgs(tc.args)
-
-			if verbose != tc.want.verbose {
-				t.Errorf("verbose: got %v, want %v", verbose, tc.want.verbose)
+			got, err := parseArgs(tc.args)
+			if err != nil {
+				t.Fatalf("parseArgs unexpected error: %v", err)
 			}
-			if version != tc.want.version {
-				t.Errorf("version: got %v, want %v", version, tc.want.version)
+			if got.Verbose != tc.want.Verbose {
+				t.Errorf("Verbose: got %v, want %v", got.Verbose, tc.want.Verbose)
 			}
-			if showHelp != tc.want.showHelp {
-				t.Errorf("showHelp: got %v, want %v", showHelp, tc.want.showHelp)
+			if got.Version != tc.want.Version {
+				t.Errorf("Version: got %v, want %v", got.Version, tc.want.Version)
 			}
-			if printEnv != tc.want.printEnv {
-				t.Errorf("printEnv: got %v, want %v", printEnv, tc.want.printEnv)
+			if got.ShowHelp != tc.want.ShowHelp {
+				t.Errorf("ShowHelp: got %v, want %v", got.ShowHelp, tc.want.ShowHelp)
 			}
-			if noOtel != tc.want.noOtel {
-				t.Errorf("noOtel: got %v, want %v", noOtel, tc.want.noOtel)
+			if got.PrintEnv != tc.want.PrintEnv {
+				t.Errorf("PrintEnv: got %v, want %v", got.PrintEnv, tc.want.PrintEnv)
 			}
-			if upstream != tc.want.upstream {
-				t.Errorf("upstream: got %q, want %q", upstream, tc.want.upstream)
+			if got.NoOtel != tc.want.NoOtel {
+				t.Errorf("NoOtel: got %v, want %v", got.NoOtel, tc.want.NoOtel)
 			}
-			if logFile != tc.want.logFile {
-				t.Errorf("logFile: got %q, want %q", logFile, tc.want.logFile)
+			if got.Upstream != tc.want.Upstream {
+				t.Errorf("Upstream: got %q, want %q", got.Upstream, tc.want.Upstream)
 			}
-			if profile != tc.want.profile {
-				t.Errorf("profile: got %q, want %q", profile, tc.want.profile)
+			if got.LogFile != tc.want.LogFile {
+				t.Errorf("LogFile: got %q, want %q", got.LogFile, tc.want.LogFile)
 			}
-			if otel != tc.want.otel {
-				t.Errorf("otel: got %v, want %v", otel, tc.want.otel)
+			if got.Profile != tc.want.Profile {
+				t.Errorf("Profile: got %q, want %q", got.Profile, tc.want.Profile)
 			}
-			if model != tc.want.model {
-				t.Errorf("model: got %q, want %q", model, tc.want.model)
+			if got.Otel != tc.want.Otel {
+				t.Errorf("Otel: got %v, want %v", got.Otel, tc.want.Otel)
 			}
-			if modelSet != tc.want.modelSet {
-				t.Errorf("modelSet: got %v, want %v", modelSet, tc.want.modelSet)
+			if got.Model != tc.want.Model {
+				t.Errorf("Model: got %q, want %q", got.Model, tc.want.Model)
 			}
-			if portFlag != tc.want.portFlag {
-				t.Errorf("portFlag: got %d, want %d", portFlag, tc.want.portFlag)
+			if got.ModelSet != tc.want.ModelSet {
+				t.Errorf("ModelSet: got %v, want %v", got.ModelSet, tc.want.ModelSet)
 			}
-			if headless != tc.want.headless {
-				t.Errorf("headless: got %v, want %v", headless, tc.want.headless)
+			if got.PortFlag != tc.want.PortFlag {
+				t.Errorf("PortFlag: got %d, want %d", got.PortFlag, tc.want.PortFlag)
 			}
-			if installHooks != tc.want.installHooks {
-				t.Errorf("installHooks: got %v, want %v", installHooks, tc.want.installHooks)
+			if got.Headless != tc.want.Headless {
+				t.Errorf("Headless: got %v, want %v", got.Headless, tc.want.Headless)
 			}
-			if uninstallHooks != tc.want.uninstallHooks {
-				t.Errorf("uninstallHooks: got %v, want %v", uninstallHooks, tc.want.uninstallHooks)
+			if got.InstallHooksFlag != tc.want.InstallHooksFlag {
+				t.Errorf("InstallHooksFlag: got %v, want %v", got.InstallHooksFlag, tc.want.InstallHooksFlag)
 			}
-			if headlessEnsure != tc.want.headlessEnsure {
-				t.Errorf("headlessEnsure: got %v, want %v", headlessEnsure, tc.want.headlessEnsure)
+			if got.UninstallHooksFlag != tc.want.UninstallHooksFlag {
+				t.Errorf("UninstallHooksFlag: got %v, want %v", got.UninstallHooksFlag, tc.want.UninstallHooksFlag)
 			}
-			if len(codexArgs) != tc.want.codexLen {
-				t.Errorf("codexArgs length: got %d, want %d (args: %v)", len(codexArgs), tc.want.codexLen, codexArgs)
+			if got.HeadlessEnsureFlag != tc.want.HeadlessEnsureFlag {
+				t.Errorf("HeadlessEnsureFlag: got %v, want %v", got.HeadlessEnsureFlag, tc.want.HeadlessEnsureFlag)
+			}
+			if got.NoUpdateCheck != tc.want.NoUpdateCheck {
+				t.Errorf("NoUpdateCheck: got %v, want %v", got.NoUpdateCheck, tc.want.NoUpdateCheck)
 			}
 		})
 	}
@@ -462,24 +404,39 @@ func captureStdout(fn func()) string {
 	return buf.String()
 }
 
-func TestHandlePrintEnv_DapiTokenRedacted(t *testing.T) {
-	out := captureStdout(func() {
-		handlePrintEnv("https://dbc.example.com", "https://gw.example.com/openai/v1", "dapi-abc123secret", "DEFAULT", "databricks-gpt-5-4", "main.codex_telemetry.codex_otel_logs")
-	})
-	if !strings.Contains(out, "dapi-***") {
-		t.Errorf("expected dapi token to appear as 'dapi-***', got:\n%s", out)
+// TestHandlePrintEnv_RedactsAllTokenShapes ensures that no matter the token
+// shape (legacy dapi-, no-hyphen dapi, JWT, empty), the literal token bytes
+// never appear in the printed output.
+func TestHandlePrintEnv_RedactsAllTokenShapes(t *testing.T) {
+	tokens := []string{
+		"dapi-abc123secret",                                  // legacy hyphenated
+		"dapiabc123secret",                                   // no hyphen
+		"eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.payload.sig",   // JWT-shaped
+		"",                                                   // empty
 	}
-	if strings.Contains(out, "dapi-abc123secret") {
-		t.Errorf("raw dapi token should not appear in output, got:\n%s", out)
+	for _, token := range tokens {
+		t.Run(fmt.Sprintf("token=%q", token), func(t *testing.T) {
+			out := captureStdout(func() {
+				handlePrintEnv("https://dbc.example.com", "https://gw.example.com/openai/v1", token, "DEFAULT", "databricks-gpt-5-4", "main.codex_telemetry.codex_otel_logs")
+			})
+			if !strings.Contains(out, "**** (redacted)") {
+				t.Errorf("expected '**** (redacted)' in output, got:\n%s", out)
+			}
+			if token != "" && strings.Contains(out, token) {
+				t.Errorf("raw token %q should not appear in output, got:\n%s", token, out)
+			}
+		})
 	}
 }
 
-func TestHandlePrintEnv_NonDapiTokenRedacted(t *testing.T) {
+func TestHandlePrintEnv_NoLegacyDapiPrefix(t *testing.T) {
+	// Per #71, the legacy "dapi-***" branch was removed in favour of a single
+	// fixed redaction. Make sure no output ever contains the legacy form.
 	out := captureStdout(func() {
-		handlePrintEnv("https://dbc.example.com", "https://gw.example.com/openai/v1", "eyJhbGciOiJSUzI1NiJ9", "DEFAULT", "databricks-gpt-5-4", "main.codex_telemetry.codex_otel_logs")
+		handlePrintEnv("https://dbc.example.com", "https://gw.example.com/openai/v1", "dapi-abc123", "DEFAULT", "databricks-gpt-5-4", "main.codex_telemetry.codex_otel_logs")
 	})
-	if !strings.Contains(out, "**** (redacted)") {
-		t.Errorf("expected non-dapi token to appear as '**** (redacted)', got:\n%s", out)
+	if strings.Contains(out, "dapi-***") {
+		t.Errorf("legacy 'dapi-***' redaction marker should be gone, got:\n%s", out)
 	}
 }
 
@@ -553,38 +510,48 @@ func TestHandleHelp_ContainsCodexCLISeparator(t *testing.T) {
 	}
 }
 
+func TestHandleHelp_NoBareNumberMinutesWording(t *testing.T) {
+	// Per #70: help text must not advertise the bare-int minutes shortcut.
+	out := captureStdout(func() {
+		handleHelp("")
+	})
+	if strings.Contains(out, "bare number = minutes") {
+		t.Errorf("help text should no longer advertise 'bare number = minutes', got:\n%s", out)
+	}
+}
+
 func TestParseArgs_Profile(t *testing.T) {
-	_, _, _, _, _, _, _, _, _, profile, _, _, _, _, _, _, _, _, _, _, _, _, _, _ := parseArgs([]string{"--profile", "aidev"})
-	if profile != "aidev" {
-		t.Errorf("expected profile=%q, got %q", "aidev", profile)
+	a := mustParseArgs(t, []string{"--profile", "aidev"})
+	if a.Profile != "aidev" {
+		t.Errorf("expected Profile=%q, got %q", "aidev", a.Profile)
 	}
 }
 
 func TestParseArgs_ProfileEquals(t *testing.T) {
-	_, _, _, _, _, _, _, _, _, profile, _, _, _, _, _, _, _, _, _, _, _, _, _, _ := parseArgs([]string{"--profile=production"})
-	if profile != "production" {
-		t.Errorf("expected profile=%q, got %q", "production", profile)
+	a := mustParseArgs(t, []string{"--profile=production"})
+	if a.Profile != "production" {
+		t.Errorf("expected Profile=%q, got %q", "production", a.Profile)
 	}
 }
 
 func TestParseArgs_Headless(t *testing.T) {
-	_, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, headless, _, _, _, _, _, _ := parseArgs([]string{"--headless"})
-	if !headless {
-		t.Error("expected headless=true for --headless")
+	a := mustParseArgs(t, []string{"--headless"})
+	if !a.Headless {
+		t.Error("expected Headless=true for --headless")
 	}
 }
 
 func TestParseArgs_NoUpdateCheck(t *testing.T) {
-	_, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, noUpdateCheck, _ := parseArgs([]string{"--no-update-check"})
-	if !noUpdateCheck {
-		t.Error("expected noUpdateCheck=true for --no-update-check")
+	a := mustParseArgs(t, []string{"--no-update-check"})
+	if !a.NoUpdateCheck {
+		t.Error("expected NoUpdateCheck=true for --no-update-check")
 	}
 }
 
 func TestParseArgs_Otel(t *testing.T) {
-	_, _, _, _, _, _, _, _, _, _, otel, _, _, _, _, _, _, _, _, _, _, _, _, _ := parseArgs([]string{"--otel"})
-	if !otel {
-		t.Error("expected otel=true for --otel")
+	a := mustParseArgs(t, []string{"--otel"})
+	if !a.Otel {
+		t.Error("expected Otel=true for --otel")
 	}
 }
 
@@ -619,30 +586,10 @@ func TestResolveOtelLogsTable(t *testing.T) {
 		savedValue string
 		want       string
 	}{
-		{
-			name:      "flag set with value wins",
-			flagValue: "custom.db.table",
-			flagSet:   true,
-			want:      "custom.db.table",
-		},
-		{
-			name:       "flag set wins over saved",
-			flagValue:  "flag.table",
-			flagSet:    true,
-			savedValue: "saved.table",
-			want:       "flag.table",
-		},
-		{
-			name:       "saved value used when flag not set",
-			flagSet:    false,
-			savedValue: "saved.table",
-			want:       "saved.table",
-		},
-		{
-			name:    "default when no flag and no saved",
-			flagSet: false,
-			want:    "main.codex_telemetry.codex_otel_logs",
-		},
+		{name: "flag set with value wins", flagValue: "custom.db.table", flagSet: true, want: "custom.db.table"},
+		{name: "flag set wins over saved", flagValue: "flag.table", flagSet: true, savedValue: "saved.table", want: "flag.table"},
+		{name: "saved value used when flag not set", flagSet: false, savedValue: "saved.table", want: "saved.table"},
+		{name: "default when no flag and no saved", flagSet: false, want: "main.codex_telemetry.codex_otel_logs"},
 	}
 
 	for _, tc := range tests {
@@ -686,10 +633,7 @@ func TestResolveProfile_FlagWinsOverStateFile(t *testing.T) {
 }
 
 func TestResolveProfile_StateFileWinsOverEnvVar(t *testing.T) {
-	// Set the env var that previously would have won over state file.
 	t.Setenv("DATABRICKS_CONFIG_PROFILE", "from-env")
-
-	// resolveProfile should use saved state, ignoring the env var entirely.
 	got := resolveProfile("", "from-state")
 	if got != "from-state" {
 		t.Errorf("expected state file value %q, got %q — env var should be ignored", "from-state", got)
@@ -704,7 +648,6 @@ func TestResolveProfile_FallsBackToDefault(t *testing.T) {
 }
 
 func TestResolveProfile_FlagWinsOverStateFile_Integration(t *testing.T) {
-	// Wire up a temp state file with a saved profile.
 	dir := t.TempDir()
 	orig := statePath
 	statePath = func() string { return filepath.Join(dir, "state.json") }
@@ -712,7 +655,6 @@ func TestResolveProfile_FlagWinsOverStateFile_Integration(t *testing.T) {
 
 	saveState(persistentState{Profile: "saved-profile"})
 
-	// Simulate --profile flag being passed.
 	got := resolveProfile("flag-profile", loadState().Profile)
 	if got != "flag-profile" {
 		t.Errorf("expected flag profile %q, got %q", "flag-profile", got)
