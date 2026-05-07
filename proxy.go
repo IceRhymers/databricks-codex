@@ -24,7 +24,7 @@ type ProxyConfig struct {
 
 // NewProxyServer returns an http.Handler that routes requests to the
 // inference upstream (default) and the OTEL upstream (/otel/).
-func NewProxyServer(config *ProxyConfig) http.Handler {
+func NewProxyServer(config *ProxyConfig) (http.Handler, error) {
 	return proxy.NewServer(&proxy.Config{
 		InferenceUpstream: config.InferenceUpstream,
 		OTELUpstream:      config.OTELUpstream,

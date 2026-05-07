@@ -35,7 +35,10 @@ func TestProxy_InjectsAuthHeader(t *testing.T) {
 		UCLogsTable:       "main.t.l",
 		TokenProvider:     warmToken("test-token-123"),
 	}
-	handler := NewProxyServer(cfg)
+	handler, err := NewProxyServer(cfg)
+	if err != nil {
+		t.Fatalf("NewProxyServer: %v", err)
+	}
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/chat/completions", nil)
 	rec := httptest.NewRecorder()
@@ -68,7 +71,10 @@ func TestProxy_RoutesDefaultToInference(t *testing.T) {
 		UCLogsTable:       "main.t.l",
 		TokenProvider:     warmToken("tok"),
 	}
-	handler := NewProxyServer(cfg)
+	handler, err := NewProxyServer(cfg)
+	if err != nil {
+		t.Fatalf("NewProxyServer: %v", err)
+	}
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
 	rec := httptest.NewRecorder()
@@ -100,7 +106,10 @@ func TestProxy_RoutesOTELPath(t *testing.T) {
 		UCLogsTable:       "main.t.l",
 		TokenProvider:     warmToken("tok"),
 	}
-	handler := NewProxyServer(cfg)
+	handler, err := NewProxyServer(cfg)
+	if err != nil {
+		t.Fatalf("NewProxyServer: %v", err)
+	}
 
 	req := httptest.NewRequest(http.MethodPost, "/otel/v1/metrics", nil)
 	rec := httptest.NewRecorder()
@@ -128,7 +137,10 @@ func TestProxy_OTELTableName_Logs(t *testing.T) {
 		UCLogsTable:       "main.telemetry.codex_otel_logs",
 		TokenProvider:     warmToken("tok"),
 	}
-	handler := NewProxyServer(cfg)
+	handler, err := NewProxyServer(cfg)
+	if err != nil {
+		t.Fatalf("NewProxyServer: %v", err)
+	}
 
 	req := httptest.NewRequest(http.MethodPost, "/otel/v1/logs", nil)
 	rec := httptest.NewRecorder()
@@ -156,7 +168,10 @@ func TestProxy_PreservesRequestBody(t *testing.T) {
 		UCLogsTable:       "main.t.l",
 		TokenProvider:     warmToken("tok"),
 	}
-	handler := NewProxyServer(cfg)
+	handler, err := NewProxyServer(cfg)
+	if err != nil {
+		t.Fatalf("NewProxyServer: %v", err)
+	}
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewBufferString(body))
 	req.Header.Set("Content-Type", "application/json")
@@ -193,7 +208,10 @@ func TestProxy_SSEStreaming(t *testing.T) {
 		UCLogsTable:       "main.t.l",
 		TokenProvider:     warmToken("tok"),
 	}
-	handler := NewProxyServer(cfg)
+	handler, err := NewProxyServer(cfg)
+	if err != nil {
+		t.Fatalf("NewProxyServer: %v", err)
+	}
 
 	l, err := StartProxy(handler, "", "")
 	if err != nil {
