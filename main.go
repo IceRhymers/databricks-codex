@@ -64,26 +64,30 @@ func main() {
 		os.Exit(0)
 	}
 
-	verbose, version, showHelp, printEnv, noOtel, otelLogsTable, otelLogsTableSet, upstream, logFile, profile, otel, proxyAPIKey, tlsCert, tlsKey, model, modelSet, portFlag, headless, idleTimeout, installHooksFlag, uninstallHooksFlag, headlessEnsureFlag, noUpdateCheck, codexArgs := parseArgs(os.Args[1:])
+	a, err := parseArgs(os.Args[1:])
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "databricks-codex:", err)
+		os.Exit(1)
+	}
 
-	if showHelp {
-		handleHelp(upstream)
+	if a.ShowHelp {
+		handleHelp(a.Upstream)
 		os.Exit(0)
 	}
 
-	if version {
+	if a.Version {
 		fmt.Printf("databricks-codex %s\n", Version)
 		os.Exit(0)
 	}
 
 	// --- Hook lifecycle commands (handled before auth/config setup) ---
-	if installHooksFlag || uninstallHooksFlag {
+	if a.InstallHooksFlag || a.UninstallHooksFlag {
 		homeDir, err := os.UserHomeDir()
 		if err != nil {
 			log.Fatalf("databricks-codex: cannot determine home dir: %v", err)
 		}
 		hp := filepath.Join(homeDir, ".codex", "hooks.json")
-		if installHooksFlag {
+		if a.InstallHooksFlag {
 			if err := installHooks(hp); err != nil {
 				log.Fatalf("databricks-codex: --install-hooks: %v", err)
 			}
@@ -98,9 +102,9 @@ func main() {
 	}
 
 	// --- Headless hook command (called by installed hooks, not by end users) ---
-	if headlessEnsureFlag {
+	if a.HeadlessEnsureFlag {
 		state := loadState()
-		port := resolvePort(portFlag, state)
+		port := resolvePort(a.PortFlag, state)
 		if err := headlessEnsure(port); err != nil {
 			log.Fatalf("databricks-codex: headless ensure failed: %v", err)
 		}
@@ -110,17 +114,17 @@ func main() {
 	// Default: discard all logs (silent wrapper).
 	log.SetOutput(io.Discard)
 
-	if verbose {
+	if a.Verbose {
 		log.SetOutput(os.Stderr)
 	}
-	if logFile != "" {
-		f, err := os.OpenFile(logFile, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	if a.LogFile != "" {
+		f, err := os.OpenFile(a.LogFile, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
 		if err != nil {
 			log.SetOutput(os.Stderr)
-			log.Fatalf("databricks-codex: cannot open log file %q: %v", logFile, err)
+			log.Fatalf("databricks-codex: cannot open log file %q: %v", a.LogFile, err)
 		}
 		defer f.Close()
-		if verbose {
+		if a.Verbose {
 			log.SetOutput(io.MultiWriter(os.Stderr, f))
 		} else {
 			log.SetOutput(f)
@@ -128,13 +132,8 @@ func main() {
 	}
 
 	// --- Resolve profile ---
-	// Resolution chain: --profile flag → saved state → "DEFAULT".
-	// The env var DATABRICKS_CONFIG_PROFILE is intentionally NOT checked here;
-	// injected env vars (e.g. from Claude's settings.json) would silently
-	// override the user's saved proxy profile, routing to the wrong workspace.
-	// When --profile is explicitly passed, save it for future sessions.
-	profileExplicit := profile != ""
-	profile = resolveProfile(profile, loadState().Profile)
+	profileExplicit := a.Profile != ""
+	profile := resolveProfile(a.Profile, loadState().Profile)
 	if profileExplicit {
 		saved := loadState()
 		saved.Profile = profile
@@ -147,8 +146,8 @@ func main() {
 	log.Printf("databricks-codex: using profile: %s", profile)
 
 	// --- Resolve model ---
-	// Resolution chain: --model flag → saved state → "databricks-gpt-5-4".
-	modelExplicit := modelSet
+	modelExplicit := a.ModelSet
+	model := a.Model
 	if model == "" {
 		if saved := loadState(); saved.Model != "" {
 			model = saved.Model
@@ -176,8 +175,8 @@ func main() {
 
 	// --- Load state and resolve port ---
 	state := loadState()
-	port := resolvePort(portFlag, state)
-	if portFlag > 0 {
+	port := resolvePort(a.PortFlag, state)
+	if a.PortFlag > 0 {
 		state.Port = port
 		if err := saveState(state); err != nil {
 			log.Printf("databricks-codex: failed to save port: %v", err)
@@ -188,16 +187,16 @@ func main() {
 	log.Printf("databricks-codex: using port: %d", port)
 
 	// --- TLS validation ---
-	if err := proxy.ValidateTLSConfig(tlsCert, tlsKey); err != nil {
+	if err := proxy.ValidateTLSConfig(a.TLSCert, a.TLSKey); err != nil {
 		log.Fatalf("databricks-codex: %v", err)
 	}
 
 	// --- Save TLS config to state so headless-ensure can use the right scheme ---
 	{
 		s := loadState()
-		if s.TLSCert != tlsCert || s.TLSKey != tlsKey {
-			s.TLSCert = tlsCert
-			s.TLSKey = tlsKey
+		if s.TLSCert != a.TLSCert || s.TLSKey != a.TLSKey {
+			s.TLSCert = a.TLSCert
+			s.TLSKey = a.TLSKey
 			if err := saveState(s); err != nil {
 				log.Printf("databricks-codex: failed to save TLS config: %v", err)
 			}
@@ -223,16 +222,15 @@ func main() {
 	}
 	log.Printf("databricks-codex: discovered host: %s", host)
 
-	gatewayURL := upstream
+	gatewayURL := a.Upstream
 	if gatewayURL == "" {
 		gatewayURL = ConstructGatewayURL(host)
 	}
 	log.Printf("databricks-codex: gateway URL: %s", gatewayURL)
 
 	// --- OTEL logs table ---
-	// Resolution chain: --otel-logs-table flag → saved state → default.
-	otelLogsTableExplicit := otelLogsTableSet
-	otelLogsTable = resolveOtelLogsTable(otelLogsTable, otelLogsTableSet, loadState().OtelLogsTable)
+	otelLogsTableExplicit := a.OtelLogsTableSet
+	otelLogsTable := resolveOtelLogsTable(a.OtelLogsTable, a.OtelLogsTableSet, loadState().OtelLogsTable)
 	if !otelLogsTableExplicit && otelLogsTable != "main.codex_telemetry.codex_otel_logs" {
 		log.Printf("databricks-codex: using saved otel-logs-table: %s", otelLogsTable)
 	}
@@ -245,18 +243,19 @@ func main() {
 			log.Printf("databricks-codex: saved otel-logs-table %q for future sessions", otelLogsTable)
 		}
 	}
-	if noOtel {
+	otel := a.Otel
+	if a.NoOtel {
 		otel = false
 	}
 
 	// --- Print env and exit if requested ---
-	if printEnv {
+	if a.PrintEnv {
 		handlePrintEnv(host, gatewayURL, initialToken, profile, model, otelLogsTable)
 		os.Exit(0)
 	}
 
 	// Verify codex is on PATH before starting proxy (skip in headless mode).
-	if !headless {
+	if !a.Headless {
 		if _, err := exec.LookPath("codex"); err != nil {
 			log.Fatalf("databricks-codex: codex binary not found on PATH — install from https://openai.com/codex")
 		}
@@ -276,14 +275,14 @@ func main() {
 	}
 
 	scheme := "http"
-	if tlsCert != "" && tlsKey != "" {
+	if a.TLSCert != "" && a.TLSKey != "" {
 		scheme = "https"
 		fmt.Fprintln(os.Stderr, "databricks-codex: TLS enabled")
 	}
 	proxyURL := fmt.Sprintf("%s://127.0.0.1:%d", scheme, portbind.ListenerPort(listener, port))
 
 	// --- Proxy handler (needed by owner and recovery goroutine) ---
-	if proxyAPIKey != "" {
+	if a.ProxyAPIKey != "" {
 		fmt.Fprintln(os.Stderr, "databricks-codex: proxy API key authentication enabled")
 	}
 	proxyHandler, err := NewProxyServer(&ProxyConfig{
@@ -291,10 +290,10 @@ func main() {
 		OTELUpstream:      otelUpstream,
 		UCLogsTable:       otelLogsTable,
 		TokenProvider:     tp,
-		Verbose:           verbose,
-		APIKey:            proxyAPIKey,
-		TLSCertFile:       tlsCert,
-		TLSKeyFile:        tlsKey,
+		Verbose:           a.Verbose,
+		APIKey:            a.ProxyAPIKey,
+		TLSCertFile:       a.TLSCert,
+		TLSKeyFile:        a.TLSKey,
 		ToolName:          "databricks-codex",
 		Version:           Version,
 	})
@@ -303,27 +302,23 @@ func main() {
 	}
 
 	// --- Reference counting ---
-	// In wrapper mode, the parent process acquires here and releases on exit.
-	// In headless mode, the proxy shuts down via idle timeout (no refcount).
 	refcountPath := refcount.PathForPort(".databricks-codex-sessions", port)
-	if !headless {
+	if !a.Headless {
 		if err := refcount.Acquire(refcountPath); err != nil {
 			log.Printf("databricks-codex: refcount acquire warning: %v", err)
 		}
 	}
 
 	// In headless mode, wrap handler with /shutdown endpoint and idle timeout.
-	// This must happen BEFORE proxy.Serve so the lifecycle mux is the handler
-	// that actually gets served.
 	var doneCh chan struct{}
-	if headless {
+	if a.Headless {
 		doneCh = make(chan struct{})
 		proxyHandler = lifecycle.WrapWithLifecycle(lifecycle.Config{
 			Inner:        proxyHandler,
 			RefcountPath: refcountPath,
 			IsOwner:      isOwner,
-			IdleTimeout:  idleTimeout,
-			APIKey:       proxyAPIKey,
+			IdleTimeout:  a.IdleTimeout,
+			APIKey:       a.ProxyAPIKey,
 			DoneCh:       doneCh,
 			LogPrefix:    "databricks-codex",
 		})
@@ -331,7 +326,7 @@ func main() {
 
 	// --- Start proxy if we own the port ---
 	if isOwner {
-		servedLn, err := proxy.Serve(listener, proxyHandler, tlsCert, tlsKey)
+		servedLn, err := proxy.Serve(listener, proxyHandler, a.TLSCert, a.TLSKey)
 		if err != nil {
 			log.Fatalf("databricks-codex: failed to start proxy: %v", err)
 		}
@@ -340,7 +335,7 @@ func main() {
 	} else {
 		log.Printf("databricks-codex: joining existing proxy on :%d", port)
 		// Watch for owner death and take over the proxy if needed.
-		go health.WatchProxy(port, proxyHandler, tlsCert, tlsKey, "databricks-codex", nil)
+		go health.WatchProxy(port, proxyHandler, a.TLSCert, a.TLSKey, "databricks-codex", nil)
 	}
 	log.Printf("databricks-codex: proxy on %s (owner=%v)", proxyURL, isOwner)
 
@@ -352,7 +347,7 @@ func main() {
 
 	cm := NewConfigManager()
 	if err := cm.EnsureConfig(proxyURL, model, modelExplicit, otelConfigEndpoint); err != nil {
-		if headless {
+		if a.Headless {
 			log.Printf("databricks-codex: warning: failed to write config.toml: %v", err)
 		} else {
 			log.Fatalf("databricks-codex: failed to write config.toml: %v", err)
@@ -360,7 +355,7 @@ func main() {
 	}
 
 	// --- Headless mode: print proxy URL and wait for signal ---
-	if headless {
+	if a.Headless {
 		runHeadless(proxyURL, listener, isOwner, refcountPath, doneCh)
 		return
 	}
@@ -370,14 +365,14 @@ func main() {
 	}
 
 	// --- Synchronous update check (before child to avoid stderr interleaving) ---
-	if !noUpdateCheck && os.Getenv("DATABRICKS_NO_UPDATE_CHECK") != "1" {
+	if !a.NoUpdateCheck && os.Getenv("DATABRICKS_NO_UPDATE_CHECK") != "1" {
 		updater.PrintUpdateNotice(buildUpdaterConfig())
 	}
 
 	log.Printf("databricks-codex: launching codex")
 
 	// --- Run codex as a child process (parent stays alive to serve the proxy) ---
-	exitCode, runErr := RunCodex(context.Background(), codexArgs)
+	exitCode, runErr := RunCodex(context.Background(), a.CodexArgs)
 
 	// --- Release refcount; if last session and owner, close listener ---
 	remaining, err := refcount.Release(refcountPath)
@@ -421,9 +416,39 @@ func runHeadless(proxyURL string, ln net.Listener, isOwner bool, refcountPath st
 }
 
 
+// Args holds all parsed databricks-codex flags plus the residual codex args.
+type Args struct {
+	Verbose            bool
+	Version            bool
+	ShowHelp           bool
+	PrintEnv           bool
+	NoOtel             bool
+	OtelLogsTable      string
+	OtelLogsTableSet   bool
+	Upstream           string
+	LogFile            string
+	Profile            string
+	Otel               bool
+	ProxyAPIKey        string
+	TLSCert            string
+	TLSKey             string
+	Model              string
+	ModelSet           bool
+	PortFlag           int
+	Headless           bool
+	IdleTimeout        time.Duration
+	InstallHooksFlag   bool
+	UninstallHooksFlag bool
+	HeadlessEnsureFlag bool
+	NoUpdateCheck      bool
+	CodexArgs          []string
+}
+
 // parseArgs separates databricks-codex flags from codex flags.
-func parseArgs(args []string) (verbose bool, version bool, showHelp bool, printEnv bool, noOtel bool, otelLogsTable string, otelLogsTableSet bool, upstream string, logFile string, profile string, otel bool, proxyAPIKey string, tlsCert string, tlsKey string, model string, modelSet bool, portFlag int, headless bool, idleTimeout time.Duration, installHooksFlag bool, uninstallHooksFlag bool, headlessEnsureFlag bool, noUpdateCheck bool, codexArgs []string) {
-	idleTimeout = 30 * time.Minute // default
+func parseArgs(args []string) (*Args, error) {
+	a := &Args{
+		IdleTimeout: 30 * time.Minute, // default
+	}
 
 	// knownFlags is defined at package level in completion_flags.go,
 	// derived from flagDefs so completions and parsing stay in sync.
@@ -434,17 +459,17 @@ func parseArgs(args []string) (verbose bool, version bool, showHelp bool, printE
 
 		// Explicit separator: everything after "--" goes to codex.
 		if arg == "--" {
-			codexArgs = append(codexArgs, args[i+1:]...)
-			return
+			a.CodexArgs = append(a.CodexArgs, args[i+1:]...)
+			return a, nil
 		}
 
 		if arg == "-h" {
-			showHelp = true
+			a.ShowHelp = true
 			i++
 			continue
 		}
 		if arg == "-v" {
-			verbose = true
+			a.Verbose = true
 			i++
 			continue
 		}
@@ -461,107 +486,104 @@ func parseArgs(args []string) (verbose bool, version bool, showHelp bool, printE
 				switch name {
 				case "--otel-logs-table":
 					if value != "" {
-						otelLogsTable = value
-						otelLogsTableSet = true
+						a.OtelLogsTable = value
+						a.OtelLogsTableSet = true
 					} else if i+1 < len(args) {
 						i++
-						otelLogsTable = args[i]
-						otelLogsTableSet = true
+						a.OtelLogsTable = args[i]
+						a.OtelLogsTableSet = true
 					}
 				case "--upstream":
 					if value != "" {
-						upstream = value
+						a.Upstream = value
 					} else if i+1 < len(args) {
 						i++
-						upstream = args[i]
+						a.Upstream = args[i]
 					}
 				case "--log-file":
 					if value != "" {
-						logFile = value
+						a.LogFile = value
 					} else if i+1 < len(args) {
 						i++
-						logFile = args[i]
+						a.LogFile = args[i]
 					}
 				case "--profile":
 					if value != "" {
-						profile = value
+						a.Profile = value
 					} else if i+1 < len(args) {
 						i++
-						profile = args[i]
+						a.Profile = args[i]
 					}
 				case "--proxy-api-key":
 					if value != "" {
-						proxyAPIKey = value
+						a.ProxyAPIKey = value
 					} else if i+1 < len(args) {
 						i++
-						proxyAPIKey = args[i]
+						a.ProxyAPIKey = args[i]
 					}
 				case "--tls-cert":
 					if value != "" {
-						tlsCert = value
+						a.TLSCert = value
 					} else if i+1 < len(args) {
 						i++
-						tlsCert = args[i]
+						a.TLSCert = args[i]
 					}
 				case "--tls-key":
 					if value != "" {
-						tlsKey = value
+						a.TLSKey = value
 					} else if i+1 < len(args) {
 						i++
-						tlsKey = args[i]
+						a.TLSKey = args[i]
 					}
 				case "--model":
 					if value != "" {
-						model = value
-						modelSet = true
+						a.Model = value
+						a.ModelSet = true
 					} else if i+1 < len(args) {
 						i++
-						model = args[i]
-						modelSet = true
+						a.Model = args[i]
+						a.ModelSet = true
 					}
 				case "--verbose":
-					verbose = true
+					a.Verbose = true
 				case "--version":
-					version = true
+					a.Version = true
 				case "--help":
-					showHelp = true
+					a.ShowHelp = true
 				case "--print-env":
-					printEnv = true
+					a.PrintEnv = true
 				case "--otel":
-					otel = true
+					a.Otel = true
 				case "--no-otel":
-					noOtel = true
+					a.NoOtel = true
 				case "--port":
 					if value != "" {
-						portFlag, _ = strconv.Atoi(value)
+						a.PortFlag, _ = strconv.Atoi(value)
 					} else if i+1 < len(args) {
 						i++
-						portFlag, _ = strconv.Atoi(args[i])
+						a.PortFlag, _ = strconv.Atoi(args[i])
 					}
 				case "--headless":
-					headless = true
+					a.Headless = true
 				case "--idle-timeout":
 					raw := value
 					if raw == "" && i+1 < len(args) {
 						i++
 						raw = args[i]
 					}
-					if raw != "" {
-						if d, err := time.ParseDuration(raw); err == nil {
-							idleTimeout = d
-						} else if mins, err := strconv.Atoi(raw); err == nil {
-							// Bare number: treat as minutes for convenience.
-							idleTimeout = time.Duration(mins) * time.Minute
-						}
+					d, err := time.ParseDuration(raw)
+					if err != nil {
+						return nil, fmt.Errorf("--idle-timeout: %q is not a valid duration (use e.g. 30s, 5m, 1h)", raw)
 					}
+					a.IdleTimeout = d
 				case "--install-hooks":
-					installHooksFlag = true
+					a.InstallHooksFlag = true
 				case "--uninstall-hooks":
-					uninstallHooksFlag = true
+					a.UninstallHooksFlag = true
 				case "--headless-ensure":
-					headlessEnsureFlag = true
+					a.HeadlessEnsureFlag = true
 				case "--no-update-check":
-					noUpdateCheck = true
+					a.NoUpdateCheck = true
 				}
 				i++
 				continue
@@ -569,10 +591,10 @@ func parseArgs(args []string) (verbose bool, version bool, showHelp bool, printE
 		}
 
 		// Not a known flag — pass through to codex.
-		codexArgs = append(codexArgs, arg)
+		a.CodexArgs = append(a.CodexArgs, arg)
 		i++
 	}
-	return
+	return a, nil
 }
 
 // handleHelp prints the databricks-codex help section, then execs codex --help.
@@ -601,7 +623,7 @@ Databricks-Codex Flags:
   --port int                Fixed proxy port (default: 49154, saved to state)
   --headless                Start proxy without launching codex (for IDE extensions)
   --headless-ensure         Start proxy if not running (called by SessionStart hook)
-  --idle-timeout duration   Idle timeout for headless mode (default 30m, 0 disables, bare number = minutes)
+  --idle-timeout duration   Idle timeout for headless mode (default 30m, 0 disables)
   --install-hooks           Install SessionStart hook into ~/.codex/hooks.json
   --uninstall-hooks         Remove databricks-codex hooks from ~/.codex/hooks.json
   --no-update-check            Skip the automatic update check on startup
@@ -650,11 +672,11 @@ func buildUpdaterConfig() updater.Config {
 
 
 // handlePrintEnv prints resolved configuration with the token redacted.
+// Redaction is applied unconditionally — never branch on token shape, since any
+// branch leaks information about the token format.
 func handlePrintEnv(databricksHost, openaiBaseURL, token, profile, model, otelLogsTable string) {
+	_ = token // intentionally unused: we never print the token
 	redacted := "**** (redacted)"
-	if strings.HasPrefix(token, "dapi-") {
-		redacted = "dapi-***"
-	}
 
 	codexPath := "(not found)"
 	if p, err := exec.LookPath("codex"); err == nil {
