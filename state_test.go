@@ -82,6 +82,22 @@ func TestSaveAndLoadState_OtelLogsTable(t *testing.T) {
 	}
 }
 
+func TestSaveAndLoadState_OtelMetricsTable(t *testing.T) {
+	dir := t.TempDir()
+	orig := statePath
+	statePath = func() string { return filepath.Join(dir, "state.json") }
+	defer func() { statePath = orig }()
+
+	if err := saveState(persistentState{OtelMetricsTable: "custom.db.metrics"}); err != nil {
+		t.Fatalf("saveState: %v", err)
+	}
+
+	s := loadState()
+	if s.OtelMetricsTable != "custom.db.metrics" {
+		t.Errorf("got OtelMetricsTable %q, want %q", s.OtelMetricsTable, "custom.db.metrics")
+	}
+}
+
 func TestSaveState_PreservesExistingFields(t *testing.T) {
 	dir := t.TempDir()
 	orig := statePath

@@ -87,9 +87,12 @@ databricks-codex --upstream https://adb-123456789.azuredatabricks.net/ai-gateway
 | `--verbose`, `-v` | `false` | Enable debug logging to stderr |
 | `--log-file` | | Write debug logs to a file (combinable with `--verbose`) |
 | `--print-env` | | Print resolved configuration (token redacted) and exit |
-| `--otel` | `true` | Enable OpenTelemetry logs export |
-| `--no-otel` | | Disable OpenTelemetry for this session |
-| `--otel-logs-table` | `main.codex_telemetry.codex_otel_logs` | Unity Catalog table for OpenTelemetry logs |
+| `--otel` | `false` | Enable OpenTelemetry export (metrics + logs) |
+| `--no-otel` | | Disable OpenTelemetry and clear all persisted OTEL keys |
+| `--otel-metrics-table` | `main.codex_telemetry.codex_otel_metrics` (when `--otel` is set) | Unity Catalog table for OpenTelemetry metrics |
+| `--otel-logs-table` | derived from metrics table when omitted | Unity Catalog table for OpenTelemetry logs |
+| `--no-otel-metrics` | | Clear only the persisted OTEL metrics key |
+| `--no-otel-logs` | | Clear only the persisted OTEL logs key |
 | `--profile` | saved/`DEFAULT` | Databricks CLI profile (saved to state file; `--profile` flag writes it once) |
 | `--model` | `databricks-gpt-5-4` | Model to use (saved for future sessions) |
 | `--port` | `49154` | Proxy listen port (saved for future sessions) |
@@ -117,7 +120,7 @@ On startup, `databricks-codex` auto-discovers:
 
 ### Verify your resolved configuration
 
-Run `--print-env` to print the resolved profile, Databricks host, upstream base URL, redacted token placeholder, OpenTelemetry logs table, and detected Codex binary path, then exit without launching Codex.
+Run `--print-env` to print the resolved profile, Databricks host, upstream base URL, redacted token placeholder, OpenTelemetry metrics and logs tables, and detected Codex binary path, then exit without launching Codex.
 
 ```bash
 databricks-codex --print-env
@@ -127,12 +130,13 @@ Example output:
 
 ```
 databricks-codex configuration:
-  Profile:           DEFAULT
-  DATABRICKS_HOST:   https://adb-1234567890123456.7.azuredatabricks.net
-  OPENAI_BASE_URL:   https://adb-1234567890123456.7.azuredatabricks.net/ai-gateway/openai/v1
-  Auth Token:        dapi-***
-  OpenTelemetry Logs Table:   main.codex_telemetry.codex_otel_logs
-  Codex binary:      /usr/local/bin/codex
+  Profile:             DEFAULT
+  DATABRICKS_HOST:     https://adb-1234567890123456.7.azuredatabricks.net
+  OPENAI_BASE_URL:     https://adb-1234567890123456.7.azuredatabricks.net/ai-gateway/openai/v1
+  Auth Token:          **** (redacted)
+  OTEL Metrics Table:  main.codex_telemetry.codex_otel_metrics
+  OTEL Logs Table:     main.codex_telemetry.codex_otel_logs
+  Codex binary:        /usr/local/bin/codex
 ```
 
 Notes:

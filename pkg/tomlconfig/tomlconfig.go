@@ -13,10 +13,11 @@ import (
 
 // PatchConfig holds the values to inject into config.toml.
 type PatchConfig struct {
-	ProxyURL      string // e.g., "http://127.0.0.1:54321"
-	Model         string // e.g., "databricks-gpt-5-4"
-	ModelExplicit bool   // true when --model was explicitly passed
-	OTELEndpoint  string // e.g., "http://127.0.0.1:54321/otel/v1/logs"; empty = no [otel] section
+	ProxyURL            string // e.g., "http://127.0.0.1:54321"
+	Model               string // e.g., "databricks-gpt-5-4"
+	ModelExplicit       bool   // true when --model was explicitly passed
+	OTELLogsEndpoint    string // e.g., "http://127.0.0.1:54321/otel/v1/logs"
+	OTELMetricsEndpoint string // e.g., "http://127.0.0.1:54321/otel/v1/metrics"
 }
 
 // sentinel is stored in originals when a key/section was absent before patching.
@@ -112,7 +113,7 @@ func (m *Manager) Patch(cfg PatchConfig) error {
 	content = m.patchSection(content, "model_providers.databricks-proxy",
 		m.buildProviderSection(cfg))
 
-	if cfg.OTELEndpoint != "" {
+	if cfg.OTELLogsEndpoint != "" || cfg.OTELMetricsEndpoint != "" {
 		content = m.patchSection(content, "otel",
 			m.buildOTELSection(cfg))
 	}
@@ -174,10 +175,22 @@ func (m *Manager) buildProviderSection(cfg PatchConfig) string {
 }
 
 // buildOTELSection builds the [otel] section body.
+// Emits `exporter` (logs) and/or `metrics_exporter` for whichever endpoints
+// are non-empty. Both can coexist in the same [otel] block.
+//
+// Note: Codex's upstream `metrics_exporter` default is Statsig
+// (https://ab.chatgpt.com/otlp/v1/metrics). We do NOT defensively rewrite
+// this at the proxy layer; setting `metrics_exporter` here is the user's
+// explicit opt-in to route metrics through Databricks instead.
 func (m *Manager) buildOTELSection(cfg PatchConfig) string {
 	var b strings.Builder
 	b.WriteString("environment = \"production\"\n")
-	b.WriteString(fmt.Sprintf("exporter = { otlp-http = { endpoint = %q, protocol = \"binary\" } }\n", cfg.OTELEndpoint))
+	if cfg.OTELLogsEndpoint != "" {
+		b.WriteString(fmt.Sprintf("exporter = { otlp-http = { endpoint = %q, protocol = \"binary\" } }\n", cfg.OTELLogsEndpoint))
+	}
+	if cfg.OTELMetricsEndpoint != "" {
+		b.WriteString(fmt.Sprintf("metrics_exporter = { otlp-http = { endpoint = %q, protocol = \"binary\" } }\n", cfg.OTELMetricsEndpoint))
+	}
 	return b.String()
 }
 
