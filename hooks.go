@@ -5,11 +5,18 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/IceRhymers/databricks-claude/pkg/headless"
 	"github.com/IceRhymers/databricks-claude/pkg/refcount"
 )
+
+// hooksKeyRegexp matches a `hooks` feature-flag assignment line. It is
+// anchored at start-of-line (after optional whitespace) and requires the key
+// be followed by whitespace or `=`, so it does NOT match the legacy
+// `codex_hooks` key.
+var hooksKeyRegexp = regexp.MustCompile(`(?m)^\s*hooks\s*=`)
 
 // headlessEnsure checks whether the proxy is healthy on the given port.
 // If not, it starts a detached headless proxy and polls until ready (max 10s).
@@ -70,7 +77,7 @@ func installHooks(hooksPath string) error {
 		return err
 	}
 
-	// Codex CLI requires [features] codex_hooks = true to read hooks.json.
+	// Codex CLI requires [features] hooks = true to read hooks.json.
 	configPath := filepath.Join(filepath.Dir(hooksPath), "config.toml")
 	return ensureHooksFeatureFlag(configPath)
 }
@@ -101,7 +108,14 @@ func uninstallHooks(hooksPath string) error {
 		doc["hooks"] = hooks
 	}
 
-	return writeHooksDoc(hooksPath, doc)
+	if err := writeHooksDoc(hooksPath, doc); err != nil {
+		return err
+	}
+
+	// Remove our `hooks = true` from config.toml. Legacy `codex_hooks =` lines
+	// are left untouched — we never migrate user-authored keys.
+	configPath := filepath.Join(filepath.Dir(hooksPath), "config.toml")
+	return removeHooksFeatureFlag(configPath)
 }
 
 // removeDBXHooks removes any hook entries whose command contains "databricks-codex --headless".
@@ -199,10 +213,14 @@ func atomicWriteFile(path string, data []byte, perm os.FileMode) error {
 	return nil
 }
 
-// ensureHooksFeatureFlag ensures config.toml contains codex_hooks = true
-// inside a [features] section. Surgical: if the key already exists it's a
-// no-op; if [features] exists the key is appended inside it; otherwise a
-// new section is appended at the end.
+// ensureHooksFeatureFlag ensures config.toml contains `hooks = true`
+// inside a [features] section. Surgical: if the new `hooks` key is already
+// present it's a no-op; if [features] exists the key is appended inside it;
+// otherwise a new section is appended at the end.
+//
+// Detection is anchored — a legacy `codex_hooks = ...` line is NOT treated
+// as enabled, and is never read, rewritten, or removed by this function.
+// If both keys end up coexisting, upstream Codex tolerates that.
 //
 // TODO(#72 follow-up): This writes directly to the same config.toml that
 // tomlconfig.Manager owns, bypassing the manager's backup/restore bookkeeping.
@@ -216,8 +234,9 @@ func ensureHooksFeatureFlag(configPath string) error {
 	}
 	content := string(data)
 
-	// Already enabled — nothing to do.
-	if strings.Contains(content, "codex_hooks") {
+	// Already enabled — nothing to do. Anchored match so `codex_hooks` does
+	// not satisfy this check.
+	if hooksKeyRegexp.MatchString(content) {
 		return nil
 	}
 
@@ -230,7 +249,7 @@ func ensureHooksFeatureFlag(configPath string) error {
 			end = len(content[idx:])
 		}
 		insertAt := idx + end
-		content = content[:insertAt] + "\ncodex_hooks = true" + content[insertAt:]
+		content = content[:insertAt] + "\nhooks = true" + content[insertAt:]
 	} else {
 		// Append a new [features] section.
 		sep := "\n"
@@ -239,11 +258,70 @@ func ensureHooksFeatureFlag(configPath string) error {
 		} else if len(content) > 0 {
 			sep = "\n"
 		}
-		content += sep + "[features]\ncodex_hooks = true\n"
+		content += sep + "[features]\nhooks = true\n"
 	}
 
 	if err := os.MkdirAll(filepath.Dir(configPath), 0o700); err != nil {
 		return fmt.Errorf("creating config dir: %w", err)
 	}
 	return atomicWriteFile(configPath, []byte(content), 0o600)
+}
+
+// removeHooksFeatureFlag removes any line that assigns the new `hooks` key
+// inside config.toml. It performs an anchored, line-oriented match so the
+// legacy `codex_hooks =` key — and any other user-authored content — is
+// preserved byte-identical.
+//
+// If the file does not exist, or contains no matching line, this is a no-op.
+func removeHooksFeatureFlag(configPath string) error {
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("reading config.toml: %w", err)
+	}
+	content := string(data)
+	if !hooksKeyRegexp.MatchString(content) {
+		return nil
+	}
+
+	// Walk the file line by line and drop only the lines whose trimmed
+	// prefix is the new `hooks` key (followed by whitespace or `=`).
+	var b strings.Builder
+	b.Grow(len(content))
+	start := 0
+	for i := 0; i <= len(content); i++ {
+		if i == len(content) || content[i] == '\n' {
+			line := content[start:i]
+			if !isNewHooksAssignmentLine(line) {
+				b.WriteString(line)
+				if i < len(content) {
+					b.WriteByte('\n')
+				}
+			}
+			start = i + 1
+		}
+	}
+	out := b.String()
+	if out == content {
+		return nil
+	}
+	return atomicWriteFile(configPath, []byte(out), 0o600)
+}
+
+// isNewHooksAssignmentLine reports whether a single line (no trailing
+// newline) is an assignment of the new `hooks` feature flag. The check is
+// anchored so `codex_hooks = ...` returns false.
+func isNewHooksAssignmentLine(line string) bool {
+	trimmed := strings.TrimLeft(line, " \t")
+	if !strings.HasPrefix(trimmed, "hooks") {
+		return false
+	}
+	rest := trimmed[len("hooks"):]
+	if len(rest) == 0 {
+		return false
+	}
+	c := rest[0]
+	return c == ' ' || c == '\t' || c == '='
 }
