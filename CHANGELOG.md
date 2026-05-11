@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.11.0](https://github.com/IceRhymers/databricks-codex/compare/v0.10.0...v0.11.0) (2026-05-11)
+
+
+### Features
+
+* add OTel metrics export to Unity Catalog ([#79](https://github.com/IceRhymers/databricks-codex/issues/79)) ([1898810](https://github.com/IceRhymers/databricks-codex/commit/18988101b555b8ffbc6a2f680243369a0ab02df3))
+* default model is now databricks-gpt-5-5 ([c2e19da](https://github.com/IceRhymers/databricks-codex/commit/c2e19da7a7cb39cb4be901dd45a621cc2b34889f))
+* default model is now databricks-gpt-5-5 ([d5ca39c](https://github.com/IceRhymers/databricks-codex/commit/d5ca39c8a2778b58fcef96c4bca2c99fb6ecc90f))
+* migrate hooks feature flag from codex_hooks to hooks ([2bf493d](https://github.com/IceRhymers/databricks-codex/commit/2bf493dd12d81e5397592c788775eeb5b2d185b4))
+* migrate hooks feature flag from codex_hooks to hooks ([c1935d4](https://github.com/IceRhymers/databricks-codex/commit/c1935d430fcd302d17399eb530cb5ae8284e4a6b))
+
 ## [0.10.0](https://github.com/IceRhymers/databricks-codex/compare/v0.9.0...v0.10.0) (2026-05-07)
 
 
