@@ -229,48 +229,14 @@ func main() {
 	log.Printf("databricks-codex: gateway URL: %s", gatewayURL)
 
 	// --- OTEL tables ---
-	// `--no-otel` is a blanket disable that also clears all persisted OTel tables.
-	// `--no-otel-metrics` / `--no-otel-logs` clear only the matching key.
+	// Mirror databricks-claude's semantic: --no-otel and --no-otel-{metrics,logs}
+	// disable the matching signal at runtime (so the [otel] section in
+	// ~/.codex/config.toml omits the relevant exporter), but the saved
+	// table preference in ~/.codex/.databricks-codex.json is left intact
+	// so it comes back the next time the user enables that signal.
 	otel := a.Otel
 	if a.NoOtel {
 		otel = false
-		saved := loadState()
-		if saved.OtelLogsTable != "" || saved.OtelMetricsTable != "" {
-			saved.OtelLogsTable = ""
-			saved.OtelMetricsTable = ""
-			if err := saveState(saved); err != nil {
-				log.Printf("databricks-codex: failed to clear OTEL keys: %v", err)
-			} else {
-				fmt.Fprintln(os.Stderr, "databricks-codex: OTEL keys cleared")
-			}
-		}
-	} else {
-		if a.NoOtelMetrics {
-			saved := loadState()
-			if saved.OtelMetricsTable != "" {
-				saved.OtelMetricsTable = ""
-				if err := saveState(saved); err != nil {
-					log.Printf("databricks-codex: failed to clear otel-metrics-table: %v", err)
-				} else {
-					fmt.Fprintln(os.Stderr, "databricks-codex: OTEL metrics key cleared")
-				}
-			}
-			a.OtelMetricsTable = ""
-			a.OtelMetricsTableSet = false
-		}
-		if a.NoOtelLogs {
-			saved := loadState()
-			if saved.OtelLogsTable != "" {
-				saved.OtelLogsTable = ""
-				if err := saveState(saved); err != nil {
-					log.Printf("databricks-codex: failed to clear otel-logs-table: %v", err)
-				} else {
-					fmt.Fprintln(os.Stderr, "databricks-codex: OTEL logs key cleared")
-				}
-			}
-			a.OtelLogsTable = ""
-			a.OtelLogsTableSet = false
-		}
 	}
 
 	// Resolve metrics table: --otel-metrics-table flag → saved state → default (only when --otel set).
@@ -712,11 +678,11 @@ Databricks-Codex Flags:
   --verbose, -v         Enable debug logging to stderr
   --log-file string     Write debug logs to a file (combinable with --verbose)
   --otel                       Enable OpenTelemetry export (metrics + logs)
-  --no-otel                    Disable OpenTelemetry and clear all persisted OTEL keys
+  --no-otel                    Disable OpenTelemetry for this session (saved tables preserved)
   --otel-metrics-table string  Unity Catalog table for OTEL metrics (saved; default: main.codex_telemetry.codex_otel_metrics when --otel is set)
   --otel-logs-table string     Unity Catalog table for OTEL logs (saved; derived from metrics table when omitted)
-  --no-otel-metrics            Disable metrics for this session AND clear the persisted OTEL metrics key
-  --no-otel-logs               Disable logs for this session AND clear the persisted OTEL logs key
+  --no-otel-metrics            Disable metrics for this session (saved table preserved)
+  --no-otel-logs               Disable logs for this session (saved table preserved)
   --proxy-api-key string    Require this API key on all proxy requests (default: disabled)
   --tls-cert string         Path to TLS certificate file (requires --tls-key)
   --tls-key string          Path to TLS private key file (requires --tls-cert)

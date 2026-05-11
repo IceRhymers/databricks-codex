@@ -88,11 +88,11 @@ databricks-codex --upstream https://adb-123456789.azuredatabricks.net/ai-gateway
 | `--log-file` | | Write debug logs to a file (combinable with `--verbose`) |
 | `--print-env` | | Print resolved configuration (token redacted) and exit |
 | `--otel` | `false` | Enable OpenTelemetry export (metrics + logs) |
-| `--no-otel` | | Disable OpenTelemetry and clear all persisted OTEL keys |
+| `--no-otel` | | Disable OpenTelemetry for this session (saved tables preserved) |
 | `--otel-metrics-table` | `main.codex_telemetry.codex_otel_metrics` (when `--otel` is set) | Unity Catalog table for OpenTelemetry metrics |
 | `--otel-logs-table` | derived from metrics table when omitted | Unity Catalog table for OpenTelemetry logs |
-| `--no-otel-metrics` | | Disable metrics for this session **and** clear the persisted OTEL metrics key |
-| `--no-otel-logs` | | Disable logs for this session **and** clear the persisted OTEL logs key |
+| `--no-otel-metrics` | | Disable metrics for this session (saved table preserved) |
+| `--no-otel-logs` | | Disable logs for this session (saved table preserved) |
 | `--profile` | saved/`DEFAULT` | Databricks CLI profile (saved to state file; `--profile` flag writes it once) |
 | `--model` | `databricks-gpt-5-4` | Model to use (saved for future sessions) |
 | `--port` | `49154` | Proxy listen port (saved for future sessions) |
