@@ -261,6 +261,185 @@ func TestWriteHooksDoc_AtomicReplace(t *testing.T) {
 	}
 }
 
+// TestEnsureHooksFeatureFlag_NoFeaturesSection verifies that if config.toml
+// has no [features] section, one is created with `hooks = true`.
+func TestEnsureHooksFeatureFlag_NoFeaturesSection(t *testing.T) {
+	dir := t.TempDir()
+	cfg := filepath.Join(dir, "config.toml")
+	original := "model = \"gpt-5\"\n"
+	if err := os.WriteFile(cfg, []byte(original), 0o600); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	if err := ensureHooksFeatureFlag(cfg); err != nil {
+		t.Fatalf("ensureHooksFeatureFlag: %v", err)
+	}
+	got, _ := os.ReadFile(cfg)
+	s := string(got)
+	if !containsLine(s, "[features]") {
+		t.Errorf("expected [features] section, got:\n%s", s)
+	}
+	if !hasNewHooksLine(s) {
+		t.Errorf("expected `hooks = true` line, got:\n%s", s)
+	}
+}
+
+// TestEnsureHooksFeatureFlag_FeaturesSectionWithOtherKey verifies that
+// `hooks = true` is inserted under an existing [features] section.
+func TestEnsureHooksFeatureFlag_FeaturesSectionWithOtherKey(t *testing.T) {
+	dir := t.TempDir()
+	cfg := filepath.Join(dir, "config.toml")
+	original := "[features]\nfoo = true\n"
+	if err := os.WriteFile(cfg, []byte(original), 0o600); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	if err := ensureHooksFeatureFlag(cfg); err != nil {
+		t.Fatalf("ensureHooksFeatureFlag: %v", err)
+	}
+	got, _ := os.ReadFile(cfg)
+	s := string(got)
+	if !containsLine(s, "foo = true") {
+		t.Errorf("expected foo = true preserved, got:\n%s", s)
+	}
+	if !hasNewHooksLine(s) {
+		t.Errorf("expected `hooks = true` line, got:\n%s", s)
+	}
+}
+
+// TestEnsureHooksFeatureFlag_AlreadyEnabled verifies no-op when `hooks = true`
+// already present.
+func TestEnsureHooksFeatureFlag_AlreadyEnabled(t *testing.T) {
+	dir := t.TempDir()
+	cfg := filepath.Join(dir, "config.toml")
+	original := "[features]\nhooks = true\n"
+	if err := os.WriteFile(cfg, []byte(original), 0o600); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	if err := ensureHooksFeatureFlag(cfg); err != nil {
+		t.Fatalf("ensureHooksFeatureFlag: %v", err)
+	}
+	got, _ := os.ReadFile(cfg)
+	if string(got) != original {
+		t.Errorf("expected no-op, got:\n%s", got)
+	}
+}
+
+// TestEnsureHooksFeatureFlag_LegacyOnlyAppendsNew verifies that if only the
+// legacy `codex_hooks = true` is present, `hooks = true` is appended and the
+// legacy line survives BYTE-IDENTICAL.
+func TestEnsureHooksFeatureFlag_LegacyOnlyAppendsNew(t *testing.T) {
+	dir := t.TempDir()
+	cfg := filepath.Join(dir, "config.toml")
+	original := "[features]\ncodex_hooks = true\n"
+	if err := os.WriteFile(cfg, []byte(original), 0o600); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	if err := ensureHooksFeatureFlag(cfg); err != nil {
+		t.Fatalf("ensureHooksFeatureFlag: %v", err)
+	}
+	got, _ := os.ReadFile(cfg)
+	s := string(got)
+	if !containsLine(s, "codex_hooks = true") {
+		t.Errorf("legacy codex_hooks line was modified or removed:\n%s", s)
+	}
+	if !hasNewHooksLine(s) {
+		t.Errorf("expected `hooks = true` line appended, got:\n%s", s)
+	}
+}
+
+// TestEnsureHooksFeatureFlag_BothKeys verifies no-op when both keys present.
+func TestEnsureHooksFeatureFlag_BothKeys(t *testing.T) {
+	dir := t.TempDir()
+	cfg := filepath.Join(dir, "config.toml")
+	original := "[features]\ncodex_hooks = true\nhooks = true\n"
+	if err := os.WriteFile(cfg, []byte(original), 0o600); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	if err := ensureHooksFeatureFlag(cfg); err != nil {
+		t.Fatalf("ensureHooksFeatureFlag: %v", err)
+	}
+	got, _ := os.ReadFile(cfg)
+	if string(got) != original {
+		t.Errorf("expected no-op, got:\n%s", got)
+	}
+}
+
+// TestUninstallHooks_RemovesNewKeyPreservesLegacy verifies that
+// --uninstall-hooks removes only `hooks =` from config.toml, leaving any
+// legacy `codex_hooks =` line untouched.
+func TestUninstallHooks_RemovesNewKeyPreservesLegacy(t *testing.T) {
+	dir := t.TempDir()
+	hooksPath := filepath.Join(dir, ".codex", "hooks.json")
+	cfg := filepath.Join(dir, ".codex", "config.toml")
+	if err := os.MkdirAll(filepath.Dir(cfg), 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	original := "[features]\ncodex_hooks = true\nhooks = true\n"
+	if err := os.WriteFile(cfg, []byte(original), 0o600); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if err := installHooks(hooksPath); err != nil {
+		t.Fatalf("installHooks: %v", err)
+	}
+	if err := uninstallHooks(hooksPath); err != nil {
+		t.Fatalf("uninstallHooks: %v", err)
+	}
+
+	got, _ := os.ReadFile(cfg)
+	s := string(got)
+	if !containsLine(s, "codex_hooks = true") {
+		t.Errorf("legacy codex_hooks line should survive uninstall, got:\n%s", s)
+	}
+	if hasNewHooksLine(s) {
+		t.Errorf("`hooks = true` line should be removed by uninstall, got:\n%s", s)
+	}
+}
+
+// containsLine returns true if any line of s exactly equals target after
+// trimming trailing whitespace.
+func containsLine(s, target string) bool {
+	for _, line := range splitLines(s) {
+		if line == target {
+			return true
+		}
+	}
+	return false
+}
+
+// hasNewHooksLine returns true if any line is the canonical `hooks = true`
+// (anchored — not matching `codex_hooks`).
+func hasNewHooksLine(s string) bool {
+	for _, line := range splitLines(s) {
+		trimmed := line
+		for len(trimmed) > 0 && (trimmed[0] == ' ' || trimmed[0] == '\t') {
+			trimmed = trimmed[1:]
+		}
+		if trimmed == "hooks = true" {
+			return true
+		}
+	}
+	return false
+}
+
+func splitLines(s string) []string {
+	var out []string
+	start := 0
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\n' {
+			out = append(out, s[start:i])
+			start = i + 1
+		}
+	}
+	if start < len(s) {
+		out = append(out, s[start:])
+	}
+	return out
+}
+
 // TestIsDBXHookEntry verifies detection of databricks-codex hook entries.
 func TestIsDBXHookEntry(t *testing.T) {
 	tests := []struct {

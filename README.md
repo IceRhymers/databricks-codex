@@ -173,7 +173,7 @@ Install hooks so every Codex session auto-starts the proxy on startup — no man
 databricks-codex --install-hooks
 ```
 
-This merges a **SessionStart** hook into `~/.codex/hooks.json` and enables the `codex_hooks` feature flag in `~/.codex/config.toml`:
+This merges a **SessionStart** hook into `~/.codex/hooks.json` and enables the `hooks` feature flag in `~/.codex/config.toml`:
 
 - **SessionStart** (`startup`): runs `databricks-codex --headless-ensure` — starts the proxy if it isn't already running.
 
