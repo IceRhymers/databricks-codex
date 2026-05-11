@@ -147,20 +147,17 @@ func main() {
 
 	// --- Resolve model ---
 	modelExplicit := a.ModelSet
-	model := a.Model
-	if model == "" {
-		if saved := loadState(); saved.Model != "" {
-			model = saved.Model
-			log.Printf("databricks-codex: using saved model: %s", model)
-		}
-	}
-	if model == "" {
-		model = "databricks-gpt-5-4"
+	savedForModel := loadState()
+	model := resolveModel(a.Model, savedForModel.Model)
+	switch {
+	case a.Model != "":
+		// flag-supplied; logged below
+	case savedForModel.Model != "":
+		log.Printf("databricks-codex: using saved model: %s", savedForModel.Model)
 	}
 	if modelExplicit {
-		saved := loadState()
-		saved.Model = model
-		if err := saveState(saved); err != nil {
+		savedForModel.Model = model
+		if err := saveState(savedForModel); err != nil {
 			log.Printf("databricks-codex: failed to save model: %v", err)
 		} else {
 			log.Printf("databricks-codex: saved model %q for future sessions", model)
@@ -653,7 +650,7 @@ Usage:
 
 Databricks-Codex Flags:
   --profile string      Databricks CLI profile (saved for future sessions; default: env or "DEFAULT")
-  --model string        Model name (saved for future sessions; default: "databricks-gpt-5-4")
+  --model string        Model name (saved for future sessions; default: "databricks-gpt-5-5")
   --upstream string     Override the AI Gateway URL (default: auto-discovered)
   --print-env           Print resolved configuration and exit (token redacted)
   --verbose, -v         Enable debug logging to stderr
@@ -748,6 +745,24 @@ func handlePrintEnv(databricksHost, openaiBaseURL, token, profile, model, otelMe
   OTEL Logs Table:     %s
   Codex binary:        %s
 `, profile, model, databricksHost, openaiBaseURL, redacted, metricsLine, logsLine, codexPath)
+}
+
+// defaultModel returns the built-in default model name used when nothing else
+// (flag, env, saved state) is set. Centralised so tests can lock the default
+// against silent drift.
+func defaultModel() string { return "databricks-gpt-5-5" }
+
+// resolveModel returns the model name using the resolution chain:
+// --model flag → saved state → built-in default. The built-in default is
+// the only value that changes when the project bumps its default model.
+func resolveModel(flagValue string, savedValue string) string {
+	if flagValue != "" {
+		return flagValue
+	}
+	if savedValue != "" {
+		return savedValue
+	}
+	return defaultModel()
 }
 
 // resolveProfile returns the Databricks CLI profile using the resolution chain:

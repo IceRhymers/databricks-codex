@@ -42,7 +42,7 @@ func TestPatch_EmptyConfig(t *testing.T) {
 
 	err := m.Patch(PatchConfig{
 		ProxyURL: "http://127.0.0.1:9999",
-		Model:    "databricks-gpt-5-4",
+		Model:    "databricks-gpt-5-5",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -55,7 +55,7 @@ func TestPatch_EmptyConfig(t *testing.T) {
 	if !strings.Contains(content, "[profiles.databricks-proxy]") {
 		t.Error("expected profiles section")
 	}
-	if !strings.Contains(content, `model = "databricks-gpt-5-4"`) {
+	if !strings.Contains(content, `model = "databricks-gpt-5-5"`) {
 		t.Error("expected model in profile section")
 	}
 	if !strings.Contains(content, `base_url = "http://127.0.0.1:9999"`) {
@@ -77,7 +77,7 @@ model = "gpt-4"
 
 	err := m.Patch(PatchConfig{
 		ProxyURL: "http://127.0.0.1:9999",
-		Model:    "databricks-gpt-5-4",
+		Model:    "databricks-gpt-5-5",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -115,7 +115,7 @@ wire_api = "responses"
 	// ModelExplicit=false: should preserve user's model.
 	err := m.Patch(PatchConfig{
 		ProxyURL:      "http://127.0.0.1:9999",
-		Model:         "databricks-gpt-5-4",
+		Model:         "databricks-gpt-5-5",
 		ModelExplicit: false,
 	})
 	if err != nil {
@@ -170,7 +170,7 @@ sandbox_permissions = "full-auto"
 
 	err := m.Patch(PatchConfig{
 		ProxyURL: "http://127.0.0.1:9999",
-		Model:    "databricks-gpt-5-4",
+		Model:    "databricks-gpt-5-5",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -260,7 +260,7 @@ shown = true
 
 	err := m.Patch(PatchConfig{
 		ProxyURL:         "http://127.0.0.1:9999",
-		Model:            "databricks-gpt-5-4",
+		Model:            "databricks-gpt-5-5",
 		OTELLogsEndpoint: "http://127.0.0.1:9999/otel/v1/logs",
 	})
 	if err != nil {
@@ -297,7 +297,7 @@ func TestRestore_NoOriginalFile(t *testing.T) {
 
 	err := m.Patch(PatchConfig{
 		ProxyURL: "http://127.0.0.1:9999",
-		Model:    "databricks-gpt-5-4",
+		Model:    "databricks-gpt-5-5",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -325,7 +325,7 @@ trust_level = trusted
 	// Should pick up the root-level model.
 	err := m.Patch(PatchConfig{
 		ProxyURL:      "http://127.0.0.1:9999",
-		Model:         "databricks-gpt-5-4",
+		Model:         "databricks-gpt-5-5",
 		ModelExplicit: false,
 	})
 	if err != nil {
@@ -336,7 +336,7 @@ trust_level = trusted
 	if !strings.Contains(content, `model = "databricks-gpt-5-3"`) {
 		t.Errorf("expected root-level model to be carried into profile section, got:\n%s", content)
 	}
-	if strings.Contains(content, `model = "databricks-gpt-5-4"`) {
+	if strings.Contains(content, `model = "databricks-gpt-5-5"`) {
 		t.Errorf("expected fallback model NOT to be used when root-level model exists, got:\n%s", content)
 	}
 }
@@ -370,7 +370,7 @@ func TestPatch_WithOTEL(t *testing.T) {
 
 	err := m.Patch(PatchConfig{
 		ProxyURL:         "http://127.0.0.1:9999",
-		Model:            "databricks-gpt-5-4",
+		Model:            "databricks-gpt-5-5",
 		OTELLogsEndpoint: "http://127.0.0.1:9999/otel/v1/logs",
 	})
 	if err != nil {
@@ -391,7 +391,7 @@ func TestPatch_WithOTELMetricsOnly(t *testing.T) {
 
 	err := m.Patch(PatchConfig{
 		ProxyURL:            "http://127.0.0.1:9999",
-		Model:               "databricks-gpt-5-4",
+		Model:               "databricks-gpt-5-5",
 		OTELMetricsEndpoint: "http://127.0.0.1:9999/otel/v1/metrics",
 	})
 	if err != nil {
@@ -416,7 +416,7 @@ func TestPatch_WithBothOTELExporters(t *testing.T) {
 
 	err := m.Patch(PatchConfig{
 		ProxyURL:            "http://127.0.0.1:9999",
-		Model:               "databricks-gpt-5-4",
+		Model:               "databricks-gpt-5-5",
 		OTELLogsEndpoint:    "http://127.0.0.1:9999/otel/v1/logs",
 		OTELMetricsEndpoint: "http://127.0.0.1:9999/otel/v1/metrics",
 	})
@@ -438,7 +438,7 @@ func TestPatch_NoOTELSectionWhenBothEmpty(t *testing.T) {
 
 	err := m.Patch(PatchConfig{
 		ProxyURL: "http://127.0.0.1:9999",
-		Model:    "databricks-gpt-5-4",
+		Model:    "databricks-gpt-5-5",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -459,7 +459,7 @@ func TestPatch_OTELReWriteAddsMetricsExporter(t *testing.T) {
 	// First patch: logs only.
 	if err := m.Patch(PatchConfig{
 		ProxyURL:         "http://127.0.0.1:9999",
-		Model:            "databricks-gpt-5-4",
+		Model:            "databricks-gpt-5-5",
 		OTELLogsEndpoint: "http://127.0.0.1:9999/otel/v1/logs",
 	}); err != nil {
 		t.Fatal(err)
@@ -468,7 +468,7 @@ func TestPatch_OTELReWriteAddsMetricsExporter(t *testing.T) {
 	// Second patch: same proxy URL, now with metrics too.
 	if err := m.Patch(PatchConfig{
 		ProxyURL:            "http://127.0.0.1:9999",
-		Model:               "databricks-gpt-5-4",
+		Model:               "databricks-gpt-5-5",
 		OTELLogsEndpoint:    "http://127.0.0.1:9999/otel/v1/logs",
 		OTELMetricsEndpoint: "http://127.0.0.1:9999/otel/v1/metrics",
 	}); err != nil {
@@ -493,7 +493,7 @@ func TestPatch_RemovesOTELSectionWhenEndpointsEmpty(t *testing.T) {
 	// First patch: OTel enabled.
 	if err := m.Patch(PatchConfig{
 		ProxyURL:            "http://127.0.0.1:9999",
-		Model:               "databricks-gpt-5-4",
+		Model:               "databricks-gpt-5-5",
 		OTELLogsEndpoint:    "http://127.0.0.1:9999/otel/v1/logs",
 		OTELMetricsEndpoint: "http://127.0.0.1:9999/otel/v1/metrics",
 	}); err != nil {
@@ -508,7 +508,7 @@ func TestPatch_RemovesOTELSectionWhenEndpointsEmpty(t *testing.T) {
 	// Second patch: OTel disabled (both endpoints empty). Section must be gone.
 	if err := m.Patch(PatchConfig{
 		ProxyURL: "http://127.0.0.1:9999",
-		Model:    "databricks-gpt-5-4",
+		Model:    "databricks-gpt-5-5",
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -534,7 +534,7 @@ func TestUpdateProxyURL(t *testing.T) {
 
 	err := m.Patch(PatchConfig{
 		ProxyURL: "http://127.0.0.1:9999",
-		Model:    "databricks-gpt-5-4",
+		Model:    "databricks-gpt-5-5",
 	})
 	if err != nil {
 		t.Fatal(err)
