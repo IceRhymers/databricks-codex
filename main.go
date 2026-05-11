@@ -274,8 +274,12 @@ func main() {
 	}
 
 	// Resolve metrics table: --otel-metrics-table flag → saved state → default (only when --otel set).
+	// --no-otel-metrics forces metrics off for this session, regardless of --otel.
 	otelMetricsTableExplicit := a.OtelMetricsTableSet
-	otelMetricsTable := resolveOtelMetricsTable(a.OtelMetricsTable, a.OtelMetricsTableSet, loadState().OtelMetricsTable, otel)
+	var otelMetricsTable string
+	if !a.NoOtelMetrics {
+		otelMetricsTable = resolveOtelMetricsTable(a.OtelMetricsTable, a.OtelMetricsTableSet, loadState().OtelMetricsTable, otel)
+	}
 	if !otelMetricsTableExplicit && otelMetricsTable != "" && otelMetricsTable != "main.codex_telemetry.codex_otel_metrics" {
 		log.Printf("databricks-codex: using saved otel-metrics-table: %s", otelMetricsTable)
 	}
@@ -290,8 +294,12 @@ func main() {
 	}
 
 	// Resolve logs table: --otel-logs-table flag → saved state → derive-from-metrics → default.
+	// --no-otel-logs forces logs off for this session, regardless of --otel.
 	otelLogsTableExplicit := a.OtelLogsTableSet
-	otelLogsTable := resolveOtelLogsTable(a.OtelLogsTable, a.OtelLogsTableSet, loadState().OtelLogsTable, otelMetricsTable, otel)
+	var otelLogsTable string
+	if !a.NoOtelLogs {
+		otelLogsTable = resolveOtelLogsTable(a.OtelLogsTable, a.OtelLogsTableSet, loadState().OtelLogsTable, otelMetricsTable, otel)
+	}
 	if !otelLogsTableExplicit && otelLogsTable != "" && otelLogsTable != "main.codex_telemetry.codex_otel_logs" {
 		log.Printf("databricks-codex: using saved otel-logs-table: %s", otelLogsTable)
 	}
@@ -707,8 +715,8 @@ Databricks-Codex Flags:
   --no-otel                    Disable OpenTelemetry and clear all persisted OTEL keys
   --otel-metrics-table string  Unity Catalog table for OTEL metrics (saved; default: main.codex_telemetry.codex_otel_metrics when --otel is set)
   --otel-logs-table string     Unity Catalog table for OTEL logs (saved; derived from metrics table when omitted)
-  --no-otel-metrics            Clear only the persisted OTEL metrics key
-  --no-otel-logs               Clear only the persisted OTEL logs key
+  --no-otel-metrics            Disable metrics for this session AND clear the persisted OTEL metrics key
+  --no-otel-logs               Disable logs for this session AND clear the persisted OTEL logs key
   --proxy-api-key string    Require this API key on all proxy requests (default: disabled)
   --tls-cert string         Path to TLS certificate file (requires --tls-key)
   --tls-key string          Path to TLS private key file (requires --tls-cert)
