@@ -147,20 +147,17 @@ func main() {
 
 	// --- Resolve model ---
 	modelExplicit := a.ModelSet
-	model := a.Model
-	if model == "" {
-		if saved := loadState(); saved.Model != "" {
-			model = saved.Model
-			log.Printf("databricks-codex: using saved model: %s", model)
-		}
-	}
-	if model == "" {
-		model = defaultModel()
+	savedForModel := loadState()
+	model := resolveModel(a.Model, savedForModel.Model)
+	switch {
+	case a.Model != "":
+		// flag-supplied; logged below
+	case savedForModel.Model != "":
+		log.Printf("databricks-codex: using saved model: %s", savedForModel.Model)
 	}
 	if modelExplicit {
-		saved := loadState()
-		saved.Model = model
-		if err := saveState(saved); err != nil {
+		savedForModel.Model = model
+		if err := saveState(savedForModel); err != nil {
 			log.Printf("databricks-codex: failed to save model: %v", err)
 		} else {
 			log.Printf("databricks-codex: saved model %q for future sessions", model)
