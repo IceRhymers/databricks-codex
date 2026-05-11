@@ -228,29 +228,41 @@ func main() {
 	}
 	log.Printf("databricks-codex: gateway URL: %s", gatewayURL)
 
-	// --- OTEL logs table ---
-	otelLogsTableExplicit := a.OtelLogsTableSet
-	otelLogsTable := resolveOtelLogsTable(a.OtelLogsTable, a.OtelLogsTableSet, loadState().OtelLogsTable)
-	if !otelLogsTableExplicit && otelLogsTable != "main.codex_telemetry.codex_otel_logs" {
+	// --- OTEL tables ---
+	// Compute the final (otel, metricsTable, logsTable) tuple from flags + state.
+	// Saved state is read once and passed in so the helper is pure & testable.
+	saved := loadState()
+	otel, otelMetricsTable, otelLogsTable := resolveOtel(a, saved)
+
+	// Log informational lines and persist any explicit table flags.
+	if !a.OtelMetricsTableSet && otelMetricsTable != "" && otelMetricsTable != "main.codex_telemetry.codex_otel_metrics" {
+		log.Printf("databricks-codex: using saved otel-metrics-table: %s", otelMetricsTable)
+	}
+	if a.OtelMetricsTableSet {
+		s := loadState()
+		s.OtelMetricsTable = otelMetricsTable
+		if err := saveState(s); err != nil {
+			log.Printf("databricks-codex: failed to save otel-metrics-table: %v", err)
+		} else {
+			log.Printf("databricks-codex: saved otel-metrics-table %q for future sessions", otelMetricsTable)
+		}
+	}
+	if !a.OtelLogsTableSet && otelLogsTable != "" && otelLogsTable != "main.codex_telemetry.codex_otel_logs" {
 		log.Printf("databricks-codex: using saved otel-logs-table: %s", otelLogsTable)
 	}
-	if otelLogsTableExplicit {
-		saved := loadState()
-		saved.OtelLogsTable = otelLogsTable
-		if err := saveState(saved); err != nil {
+	if a.OtelLogsTableSet {
+		s := loadState()
+		s.OtelLogsTable = otelLogsTable
+		if err := saveState(s); err != nil {
 			log.Printf("databricks-codex: failed to save otel-logs-table: %v", err)
 		} else {
 			log.Printf("databricks-codex: saved otel-logs-table %q for future sessions", otelLogsTable)
 		}
 	}
-	otel := a.Otel
-	if a.NoOtel {
-		otel = false
-	}
 
 	// --- Print env and exit if requested ---
 	if a.PrintEnv {
-		handlePrintEnv(host, gatewayURL, initialToken, profile, model, otelLogsTable)
+		handlePrintEnv(host, gatewayURL, initialToken, profile, model, otelMetricsTable, otelLogsTable)
 		os.Exit(0)
 	}
 
@@ -288,6 +300,7 @@ func main() {
 	proxyHandler, err := NewProxyServer(&ProxyConfig{
 		InferenceUpstream: gatewayURL,
 		OTELUpstream:      otelUpstream,
+		UCMetricsTable:    otelMetricsTable,
 		UCLogsTable:       otelLogsTable,
 		TokenProvider:     tp,
 		Verbose:           a.Verbose,
@@ -340,13 +353,19 @@ func main() {
 	log.Printf("databricks-codex: proxy on %s (owner=%v)", proxyURL, isOwner)
 
 	// --- Write config once (idempotent) ---
-	otelConfigEndpoint := ""
+	otelLogsConfigEndpoint := ""
+	otelMetricsConfigEndpoint := ""
 	if otel {
-		otelConfigEndpoint = proxyURL + "/otel/v1/logs"
+		if otelLogsTable != "" {
+			otelLogsConfigEndpoint = proxyURL + "/otel/v1/logs"
+		}
+		if otelMetricsTable != "" {
+			otelMetricsConfigEndpoint = proxyURL + "/otel/v1/metrics"
+		}
 	}
 
 	cm := NewConfigManager()
-	if err := cm.EnsureConfig(proxyURL, model, modelExplicit, otelConfigEndpoint); err != nil {
+	if err := cm.EnsureConfig(proxyURL, model, modelExplicit, otelLogsConfigEndpoint, otelMetricsConfigEndpoint); err != nil {
 		if a.Headless {
 			log.Printf("databricks-codex: warning: failed to write config.toml: %v", err)
 		} else {
@@ -361,7 +380,16 @@ func main() {
 	}
 
 	if otel {
-		log.Printf("databricks-codex: OTEL enabled — logs=%s", otelLogsTable)
+		var parts []string
+		if otelMetricsTable != "" {
+			parts = append(parts, "metrics="+otelMetricsTable)
+		}
+		if otelLogsTable != "" {
+			parts = append(parts, "logs="+otelLogsTable)
+		}
+		if len(parts) > 0 {
+			log.Printf("databricks-codex: OTEL enabled — %s", strings.Join(parts, ", "))
+		}
 	}
 
 	// --- Synchronous update check (before child to avoid stderr interleaving) ---
@@ -415,33 +443,36 @@ func runHeadless(proxyURL string, ln net.Listener, isOwner bool, refcountPath st
 	}
 }
 
-
 // Args holds all parsed databricks-codex flags plus the residual codex args.
 type Args struct {
-	Verbose            bool
-	Version            bool
-	ShowHelp           bool
-	PrintEnv           bool
-	NoOtel             bool
-	OtelLogsTable      string
-	OtelLogsTableSet   bool
-	Upstream           string
-	LogFile            string
-	Profile            string
-	Otel               bool
-	ProxyAPIKey        string
-	TLSCert            string
-	TLSKey             string
-	Model              string
-	ModelSet           bool
-	PortFlag           int
-	Headless           bool
-	IdleTimeout        time.Duration
-	InstallHooksFlag   bool
-	UninstallHooksFlag bool
-	HeadlessEnsureFlag bool
-	NoUpdateCheck      bool
-	CodexArgs          []string
+	Verbose             bool
+	Version             bool
+	ShowHelp            bool
+	PrintEnv            bool
+	NoOtel              bool
+	NoOtelMetrics       bool
+	NoOtelLogs          bool
+	OtelLogsTable       string
+	OtelLogsTableSet    bool
+	OtelMetricsTable    string
+	OtelMetricsTableSet bool
+	Upstream            string
+	LogFile             string
+	Profile             string
+	Otel                bool
+	ProxyAPIKey         string
+	TLSCert             string
+	TLSKey              string
+	Model               string
+	ModelSet            bool
+	PortFlag            int
+	Headless            bool
+	IdleTimeout         time.Duration
+	InstallHooksFlag    bool
+	UninstallHooksFlag  bool
+	HeadlessEnsureFlag  bool
+	NoUpdateCheck       bool
+	CodexArgs           []string
 }
 
 // parseArgs separates databricks-codex flags from codex flags.
@@ -492,6 +523,15 @@ func parseArgs(args []string) (*Args, error) {
 						i++
 						a.OtelLogsTable = args[i]
 						a.OtelLogsTableSet = true
+					}
+				case "--otel-metrics-table":
+					if value != "" {
+						a.OtelMetricsTable = value
+						a.OtelMetricsTableSet = true
+					} else if i+1 < len(args) {
+						i++
+						a.OtelMetricsTable = args[i]
+						a.OtelMetricsTableSet = true
 					}
 				case "--upstream":
 					if value != "" {
@@ -556,6 +596,10 @@ func parseArgs(args []string) (*Args, error) {
 					a.Otel = true
 				case "--no-otel":
 					a.NoOtel = true
+				case "--no-otel-metrics":
+					a.NoOtelMetrics = true
+				case "--no-otel-logs":
+					a.NoOtelLogs = true
 				case "--port":
 					if value != "" {
 						a.PortFlag, _ = strconv.Atoi(value)
@@ -614,9 +658,12 @@ Databricks-Codex Flags:
   --print-env           Print resolved configuration and exit (token redacted)
   --verbose, -v         Enable debug logging to stderr
   --log-file string     Write debug logs to a file (combinable with --verbose)
-  --otel                    Enable OpenTelemetry log export
-  --no-otel                 Disable OpenTelemetry for this session
-  --otel-logs-table string  Unity Catalog table for OTEL logs (saved for future sessions; default: main.codex_telemetry.codex_otel_logs)
+  --otel                       Enable OpenTelemetry export (metrics + logs)
+  --no-otel                    Disable OpenTelemetry for this session (saved tables preserved)
+  --otel-metrics-table string  Unity Catalog table for OTEL metrics (saved; default: main.codex_telemetry.codex_otel_metrics when --otel is set)
+  --otel-logs-table string     Unity Catalog table for OTEL logs (saved; derived from metrics table when omitted)
+  --no-otel-metrics            Disable metrics for this session (saved table preserved)
+  --no-otel-logs               Disable logs for this session (saved table preserved)
   --proxy-api-key string    Require this API key on all proxy requests (default: disabled)
   --tls-cert string         Path to TLS certificate file (requires --tls-key)
   --tls-key string          Path to TLS private key file (requires --tls-cert)
@@ -670,11 +717,10 @@ func buildUpdaterConfig() updater.Config {
 	}
 }
 
-
 // handlePrintEnv prints resolved configuration with the token redacted.
 // Redaction is applied unconditionally — never branch on token shape, since any
 // branch leaks information about the token format.
-func handlePrintEnv(databricksHost, openaiBaseURL, token, profile, model, otelLogsTable string) {
+func handlePrintEnv(databricksHost, openaiBaseURL, token, profile, model, otelMetricsTable, otelLogsTable string) {
 	_ = token // intentionally unused: we never print the token
 	redacted := "**** (redacted)"
 
@@ -683,15 +729,25 @@ func handlePrintEnv(databricksHost, openaiBaseURL, token, profile, model, otelLo
 		codexPath = p
 	}
 
+	metricsLine := otelMetricsTable
+	if metricsLine == "" {
+		metricsLine = "(disabled)"
+	}
+	logsLine := otelLogsTable
+	if logsLine == "" {
+		logsLine = "(disabled)"
+	}
+
 	fmt.Printf(`databricks-codex configuration:
-  Profile:           %s
-  Model:             %s
-  DATABRICKS_HOST:   %s
-  OPENAI_BASE_URL:   %s
-  Auth Token:        %s
-  OTEL Logs Table:   %s
-  Codex binary:      %s
-`, profile, model, databricksHost, openaiBaseURL, redacted, otelLogsTable, codexPath)
+  Profile:             %s
+  Model:               %s
+  DATABRICKS_HOST:     %s
+  OPENAI_BASE_URL:     %s
+  Auth Token:          %s
+  OTEL Metrics Table:  %s
+  OTEL Logs Table:     %s
+  Codex binary:        %s
+`, profile, model, databricksHost, openaiBaseURL, redacted, metricsLine, logsLine, codexPath)
 }
 
 // resolveProfile returns the Databricks CLI profile using the resolution chain:
@@ -708,15 +764,83 @@ func resolveProfile(flagValue string, savedValue string) string {
 	return "DEFAULT"
 }
 
+// resolveOtel is the orchestration: given parsed flags + saved state, decide
+// whether OTel is on for this session and which (metrics, logs) tables to use.
+//
+// Semantics mirror databricks-claude:
+//
+//	OTel is "on" if any of: --otel, --otel-metrics-table, --otel-logs-table,
+//	or saved state has any table set — UNLESS --no-otel was passed, which
+//	is the unconditional kill switch.
+//
+//	--no-otel-metrics / --no-otel-logs disable that specific signal for the
+//	current session but leave OTel itself on (so the other signal keeps
+//	exporting) and leave the saved table preference intact.
+//
+// Both returned table strings are empty when their signal is disabled.
+func resolveOtel(a *Args, saved persistentState) (otel bool, metricsTable string, logsTable string) {
+	otel = a.Otel
+	if !otel && !a.NoOtel {
+		if a.OtelMetricsTableSet || a.OtelLogsTableSet || saved.OtelMetricsTable != "" || saved.OtelLogsTable != "" {
+			otel = true
+		}
+	}
+	if a.NoOtel {
+		otel = false
+	}
+
+	if !a.NoOtelMetrics {
+		metricsTable = resolveOtelMetricsTable(a.OtelMetricsTable, a.OtelMetricsTableSet, saved.OtelMetricsTable, otel)
+	}
+	if !a.NoOtelLogs {
+		logsTable = resolveOtelLogsTable(a.OtelLogsTable, a.OtelLogsTableSet, saved.OtelLogsTable, metricsTable, otel)
+	}
+	return otel, metricsTable, logsTable
+}
+
 // resolveOtelLogsTable returns the OTEL logs table using the resolution chain:
-// explicit flag → saved state → default.
-func resolveOtelLogsTable(flagValue string, flagSet bool, savedValue string) string {
+// explicit flag → saved state → derive-from-metrics-table → default.
+// Returns empty string when otel is disabled.
+func resolveOtelLogsTable(flagValue string, flagSet bool, savedValue string, metricsTable string, otel bool) string {
+	if !otel {
+		return ""
+	}
 	if flagSet && flagValue != "" {
 		return flagValue
 	}
 	if savedValue != "" {
 		return savedValue
 	}
+	if metricsTable != "" {
+		return deriveLogsTable(metricsTable)
+	}
 	return "main.codex_telemetry.codex_otel_logs"
 }
 
+// resolveOtelMetricsTable returns the OTEL metrics table using the resolution chain:
+// explicit flag → saved state → default. Returns empty string when otel is disabled.
+func resolveOtelMetricsTable(flagValue string, flagSet bool, savedValue string, otel bool) string {
+	if !otel {
+		return ""
+	}
+	if flagSet && flagValue != "" {
+		return flagValue
+	}
+	if savedValue != "" {
+		return savedValue
+	}
+	return "main.codex_telemetry.codex_otel_metrics"
+}
+
+// deriveLogsTable derives the OTEL logs table name from a metrics table name.
+// If the metrics table ends with "_otel_metrics", replace that suffix with "_otel_logs".
+// Otherwise append "_otel_logs". Ported from databricks-claude/main.go.
+func deriveLogsTable(metricsTable string) string {
+	if metricsTable == "" {
+		return ""
+	}
+	if strings.HasSuffix(metricsTable, "_otel_metrics") {
+		return strings.TrimSuffix(metricsTable, "_otel_metrics") + "_otel_logs"
+	}
+	return metricsTable + "_otel_logs"
+}

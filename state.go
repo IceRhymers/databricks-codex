@@ -10,12 +10,13 @@ import (
 // persistentState is the JSON schema for ~/.codex/.databricks-codex.json.
 // This file survives config.toml restore and persists across sessions.
 type persistentState struct {
-	Profile       string `json:"profile,omitempty"`
-	OtelLogsTable string `json:"otel_logs_table,omitempty"`
-	Model         string `json:"model,omitempty"`
-	Port          int    `json:"port,omitempty"`
-	TLSCert       string `json:"tls_cert,omitempty"`
-	TLSKey        string `json:"tls_key,omitempty"`
+	Profile          string `json:"profile,omitempty"`
+	OtelLogsTable    string `json:"otel_logs_table,omitempty"`
+	OtelMetricsTable string `json:"otel_metrics_table,omitempty"`
+	Model            string `json:"model,omitempty"`
+	Port             int    `json:"port,omitempty"`
+	TLSCert          string `json:"tls_cert,omitempty"`
+	TLSKey           string `json:"tls_key,omitempty"`
 }
 
 const defaultPort = 49154

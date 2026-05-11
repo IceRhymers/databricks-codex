@@ -4,7 +4,6 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 
 	"github.com/IceRhymers/databricks-codex/pkg/tomlconfig"
@@ -29,42 +28,21 @@ func NewConfigManager() *ConfigManager {
 	}
 }
 
-// EnsureConfig is an idempotent config writer. It reads ~/.codex/config.toml,
-// checks if the model_providers.databricks-proxy base_url already equals proxyURL,
-// and if so returns nil (no-op). Otherwise it patches the config.
-// The config persists pointing at the fixed port permanently.
-func (cm *ConfigManager) EnsureConfig(proxyURL, model string, modelExplicit bool, otelEndpoint string) error {
+// EnsureConfig is an idempotent config writer. It always invokes the
+// surgical tomlconfig.Patch — which is itself idempotent for unchanged
+// managed keys and additive for new ones — so calling EnsureConfig with
+// the same proxy URL but different OTEL endpoints will correctly add or
+// update the `[otel]` section without disturbing user content.
+func (cm *ConfigManager) EnsureConfig(proxyURL, model string, modelExplicit bool, otelLogsEndpoint, otelMetricsEndpoint string) error {
 	cm.mu.Lock()
 	defer cm.mu.Unlock()
 
-	// Read existing config to check idempotency.
-	existing, _ := os.ReadFile(cm.config.ConfigPath())
-	if existing != nil {
-		// Check if base_url already matches proxyURL.
-		for _, line := range strings.Split(string(existing), "\n") {
-			trimmed := strings.TrimSpace(line)
-			if strings.HasPrefix(trimmed, "base_url") && strings.Contains(trimmed, "=") {
-				parts := strings.SplitN(trimmed, "=", 2)
-				if len(parts) == 2 {
-					val := strings.TrimSpace(parts[1])
-					val = strings.Trim(val, `"`)
-					if val == proxyURL {
-						log.Printf("databricks-codex: config.toml already configured for %s", proxyURL)
-						return nil
-					}
-				}
-			}
-		}
-	}
-
-	// Not yet configured — patch config.toml directly.
-	// No backup/restore needed: the fixed-port design means EnsureConfig is
-	// self-healing on next boot (same URL every time).
 	if err := cm.config.Patch(tomlconfig.PatchConfig{
-		ProxyURL:      proxyURL,
-		Model:         model,
-		ModelExplicit: modelExplicit,
-		OTELEndpoint:  otelEndpoint,
+		ProxyURL:            proxyURL,
+		Model:               model,
+		ModelExplicit:       modelExplicit,
+		OTELLogsEndpoint:    otelLogsEndpoint,
+		OTELMetricsEndpoint: otelMetricsEndpoint,
 	}); err != nil {
 		return err
 	}
@@ -72,6 +50,6 @@ func (cm *ConfigManager) EnsureConfig(proxyURL, model string, modelExplicit bool
 	// Clean up any stale backup from pre-v0.6.0 crash recovery.
 	os.Remove(cm.config.ConfigPath() + ".databricks-codex-backup")
 
-	log.Printf("databricks-codex: wrote config.toml (proxy: %s)", proxyURL)
+	log.Printf("databricks-codex: ensured config.toml (proxy: %s)", proxyURL)
 	return nil
 }

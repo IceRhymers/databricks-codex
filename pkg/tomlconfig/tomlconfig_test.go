@@ -259,9 +259,9 @@ shown = true
 	m, configPath := setup(t, initial)
 
 	err := m.Patch(PatchConfig{
-		ProxyURL:     "http://127.0.0.1:9999",
-		Model:        "databricks-gpt-5-4",
-		OTELEndpoint: "http://127.0.0.1:9999/otel/v1/logs",
+		ProxyURL:         "http://127.0.0.1:9999",
+		Model:            "databricks-gpt-5-4",
+		OTELLogsEndpoint: "http://127.0.0.1:9999/otel/v1/logs",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -369,9 +369,9 @@ func TestPatch_WithOTEL(t *testing.T) {
 	m, configPath := setup(t, "")
 
 	err := m.Patch(PatchConfig{
-		ProxyURL:     "http://127.0.0.1:9999",
-		Model:        "databricks-gpt-5-4",
-		OTELEndpoint: "http://127.0.0.1:9999/otel/v1/logs",
+		ProxyURL:         "http://127.0.0.1:9999",
+		Model:            "databricks-gpt-5-4",
+		OTELLogsEndpoint: "http://127.0.0.1:9999/otel/v1/logs",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -383,6 +383,149 @@ func TestPatch_WithOTEL(t *testing.T) {
 	}
 	if !strings.Contains(content, `endpoint = "http://127.0.0.1:9999/otel/v1/logs"`) {
 		t.Error("expected OTEL endpoint in config")
+	}
+}
+
+func TestPatch_WithOTELMetricsOnly(t *testing.T) {
+	m, configPath := setup(t, "")
+
+	err := m.Patch(PatchConfig{
+		ProxyURL:            "http://127.0.0.1:9999",
+		Model:               "databricks-gpt-5-4",
+		OTELMetricsEndpoint: "http://127.0.0.1:9999/otel/v1/metrics",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	content := readConfig(t, configPath)
+	if !strings.Contains(content, "[otel]") {
+		t.Error("expected [otel] section")
+	}
+	if !strings.Contains(content, `metrics_exporter = { otlp-http = { endpoint = "http://127.0.0.1:9999/otel/v1/metrics"`) {
+		t.Errorf("expected metrics_exporter key in [otel] section, got:\n%s", content)
+	}
+	// Specifically: there should be no bare `exporter = { otlp-http = { endpoint = "http://...logs"`
+	if strings.Contains(content, `endpoint = "http://127.0.0.1:9999/otel/v1/logs"`) {
+		t.Errorf("expected no logs exporter when only metrics endpoint provided, got:\n%s", content)
+	}
+}
+
+func TestPatch_WithBothOTELExporters(t *testing.T) {
+	m, configPath := setup(t, "")
+
+	err := m.Patch(PatchConfig{
+		ProxyURL:            "http://127.0.0.1:9999",
+		Model:               "databricks-gpt-5-4",
+		OTELLogsEndpoint:    "http://127.0.0.1:9999/otel/v1/logs",
+		OTELMetricsEndpoint: "http://127.0.0.1:9999/otel/v1/metrics",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	content := readConfig(t, configPath)
+	if !strings.Contains(content, `endpoint = "http://127.0.0.1:9999/otel/v1/logs"`) {
+		t.Errorf("expected logs endpoint in [otel] section, got:\n%s", content)
+	}
+	if !strings.Contains(content, `endpoint = "http://127.0.0.1:9999/otel/v1/metrics"`) {
+		t.Errorf("expected metrics endpoint in [otel] section, got:\n%s", content)
+	}
+}
+
+func TestPatch_NoOTELSectionWhenBothEmpty(t *testing.T) {
+	m, configPath := setup(t, "")
+
+	err := m.Patch(PatchConfig{
+		ProxyURL: "http://127.0.0.1:9999",
+		Model:    "databricks-gpt-5-4",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	content := readConfig(t, configPath)
+	if strings.Contains(content, "[otel]") {
+		t.Errorf("expected no [otel] section when both endpoints empty, got:\n%s", content)
+	}
+}
+
+// TestPatch_OTELReWriteAddsMetricsExporter exercises the EnsureConfig regression
+// flagged in PR review: an existing [otel] section with only `exporter` should
+// gain `metrics_exporter` on a subsequent Patch with both endpoints set.
+func TestPatch_OTELReWriteAddsMetricsExporter(t *testing.T) {
+	m, configPath := setup(t, "")
+
+	// First patch: logs only.
+	if err := m.Patch(PatchConfig{
+		ProxyURL:         "http://127.0.0.1:9999",
+		Model:            "databricks-gpt-5-4",
+		OTELLogsEndpoint: "http://127.0.0.1:9999/otel/v1/logs",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Second patch: same proxy URL, now with metrics too.
+	if err := m.Patch(PatchConfig{
+		ProxyURL:            "http://127.0.0.1:9999",
+		Model:               "databricks-gpt-5-4",
+		OTELLogsEndpoint:    "http://127.0.0.1:9999/otel/v1/logs",
+		OTELMetricsEndpoint: "http://127.0.0.1:9999/otel/v1/metrics",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	content := readConfig(t, configPath)
+	if !strings.Contains(content, `metrics_exporter = { otlp-http = { endpoint = "http://127.0.0.1:9999/otel/v1/metrics"`) {
+		t.Errorf("expected metrics_exporter after re-patch, got:\n%s", content)
+	}
+	if !strings.Contains(content, `endpoint = "http://127.0.0.1:9999/otel/v1/logs"`) {
+		t.Errorf("expected logs endpoint to still be present after re-patch, got:\n%s", content)
+	}
+}
+
+// TestPatch_RemovesOTELSectionWhenEndpointsEmpty exercises the --no-otel
+// regression: a previously-written [otel] section must be removed entirely
+// when a subsequent Patch comes in with both endpoints empty.
+func TestPatch_RemovesOTELSectionWhenEndpointsEmpty(t *testing.T) {
+	m, configPath := setup(t, "")
+
+	// First patch: OTel enabled.
+	if err := m.Patch(PatchConfig{
+		ProxyURL:            "http://127.0.0.1:9999",
+		Model:               "databricks-gpt-5-4",
+		OTELLogsEndpoint:    "http://127.0.0.1:9999/otel/v1/logs",
+		OTELMetricsEndpoint: "http://127.0.0.1:9999/otel/v1/metrics",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	before := readConfig(t, configPath)
+	if !strings.Contains(before, "[otel]") {
+		t.Fatalf("setup error: expected [otel] section after first patch, got:\n%s", before)
+	}
+
+	// Second patch: OTel disabled (both endpoints empty). Section must be gone.
+	if err := m.Patch(PatchConfig{
+		ProxyURL: "http://127.0.0.1:9999",
+		Model:    "databricks-gpt-5-4",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	after := readConfig(t, configPath)
+	if strings.Contains(after, "[otel]") {
+		t.Errorf("expected [otel] section to be removed after empty-endpoints patch, got:\n%s", after)
+	}
+	if strings.Contains(after, "exporter = { otlp-http") {
+		t.Errorf("expected no stale exporter line after removal, got:\n%s", after)
+	}
+	if strings.Contains(after, "metrics_exporter") {
+		t.Errorf("expected no stale metrics_exporter line after removal, got:\n%s", after)
+	}
+	// And [profiles.databricks-proxy] should still be intact.
+	if !strings.Contains(after, "[profiles.databricks-proxy]") {
+		t.Errorf("expected [profiles.databricks-proxy] to survive [otel] removal, got:\n%s", after)
 	}
 }
 

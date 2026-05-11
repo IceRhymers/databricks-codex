@@ -125,6 +125,46 @@ func TestParseArgs_OtelLogsTableDefault(t *testing.T) {
 	_ = a.OtelLogsTable
 }
 
+func TestParseArgs_OtelMetricsTable(t *testing.T) {
+	a := mustParseArgs(t, []string{"--otel-metrics-table", "main.custom.metrics"})
+	if !a.OtelMetricsTableSet {
+		t.Error("expected OtelMetricsTableSet=true when --otel-metrics-table is passed")
+	}
+	if a.OtelMetricsTable != "main.custom.metrics" {
+		t.Errorf("expected OtelMetricsTable=%q, got %q", "main.custom.metrics", a.OtelMetricsTable)
+	}
+}
+
+func TestParseArgs_OtelMetricsTableEquals(t *testing.T) {
+	a := mustParseArgs(t, []string{"--otel-metrics-table=cat.schema.tbl"})
+	if !a.OtelMetricsTableSet {
+		t.Error("expected OtelMetricsTableSet=true for --otel-metrics-table=value form")
+	}
+	if a.OtelMetricsTable != "cat.schema.tbl" {
+		t.Errorf("expected OtelMetricsTable=%q, got %q", "cat.schema.tbl", a.OtelMetricsTable)
+	}
+}
+
+func TestParseArgs_NoOtelMetrics(t *testing.T) {
+	a := mustParseArgs(t, []string{"--no-otel-metrics"})
+	if !a.NoOtelMetrics {
+		t.Error("expected NoOtelMetrics=true for --no-otel-metrics")
+	}
+	if a.NoOtelLogs || a.NoOtel {
+		t.Error("--no-otel-metrics should not set NoOtelLogs or NoOtel")
+	}
+}
+
+func TestParseArgs_NoOtelLogs(t *testing.T) {
+	a := mustParseArgs(t, []string{"--no-otel-logs"})
+	if !a.NoOtelLogs {
+		t.Error("expected NoOtelLogs=true for --no-otel-logs")
+	}
+	if a.NoOtelMetrics || a.NoOtel {
+		t.Error("--no-otel-logs should not set NoOtelMetrics or NoOtel")
+	}
+}
+
 func TestParseArgs_UnknownFlagPassthrough(t *testing.T) {
 	a := mustParseArgs(t, []string{"--unknown"})
 	if len(a.CodexArgs) != 1 || a.CodexArgs[0] != "--unknown" {
@@ -409,15 +449,15 @@ func captureStdout(fn func()) string {
 // never appear in the printed output.
 func TestHandlePrintEnv_RedactsAllTokenShapes(t *testing.T) {
 	tokens := []string{
-		"dapi-abc123secret",                                  // legacy hyphenated
-		"dapiabc123secret",                                   // no hyphen
-		"eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.payload.sig",   // JWT-shaped
-		"",                                                   // empty
+		"dapi-abc123secret", // legacy hyphenated
+		"dapiabc123secret",  // no hyphen
+		"eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.payload.sig", // JWT-shaped
+		"", // empty
 	}
 	for _, token := range tokens {
 		t.Run(fmt.Sprintf("token=%q", token), func(t *testing.T) {
 			out := captureStdout(func() {
-				handlePrintEnv("https://dbc.example.com", "https://gw.example.com/openai/v1", token, "DEFAULT", "databricks-gpt-5-4", "main.codex_telemetry.codex_otel_logs")
+				handlePrintEnv("https://dbc.example.com", "https://gw.example.com/openai/v1", token, "DEFAULT", "databricks-gpt-5-4", "main.codex_telemetry.codex_otel_metrics", "main.codex_telemetry.codex_otel_logs")
 			})
 			if !strings.Contains(out, "**** (redacted)") {
 				t.Errorf("expected '**** (redacted)' in output, got:\n%s", out)
@@ -433,7 +473,7 @@ func TestHandlePrintEnv_NoLegacyDapiPrefix(t *testing.T) {
 	// Per #71, the legacy "dapi-***" branch was removed in favour of a single
 	// fixed redaction. Make sure no output ever contains the legacy form.
 	out := captureStdout(func() {
-		handlePrintEnv("https://dbc.example.com", "https://gw.example.com/openai/v1", "dapi-abc123", "DEFAULT", "databricks-gpt-5-4", "main.codex_telemetry.codex_otel_logs")
+		handlePrintEnv("https://dbc.example.com", "https://gw.example.com/openai/v1", "dapi-abc123", "DEFAULT", "databricks-gpt-5-4", "main.codex_telemetry.codex_otel_metrics", "main.codex_telemetry.codex_otel_logs")
 	})
 	if strings.Contains(out, "dapi-***") {
 		t.Errorf("legacy 'dapi-***' redaction marker should be gone, got:\n%s", out)
@@ -442,7 +482,7 @@ func TestHandlePrintEnv_NoLegacyDapiPrefix(t *testing.T) {
 
 func TestHandlePrintEnv_ContainsProfile(t *testing.T) {
 	out := captureStdout(func() {
-		handlePrintEnv("https://dbc.example.com", "https://gw.example.com/openai/v1", "tok", "aidev", "databricks-gpt-5-4", "main.codex_telemetry.codex_otel_logs")
+		handlePrintEnv("https://dbc.example.com", "https://gw.example.com/openai/v1", "tok", "aidev", "databricks-gpt-5-4", "main.codex_telemetry.codex_otel_metrics", "main.codex_telemetry.codex_otel_logs")
 	})
 	if !strings.Contains(out, "aidev") {
 		t.Errorf("expected output to contain profile 'aidev', got:\n%s", out)
@@ -452,7 +492,7 @@ func TestHandlePrintEnv_ContainsProfile(t *testing.T) {
 func TestHandlePrintEnv_ContainsDatabricksHost(t *testing.T) {
 	host := "https://dbc-abc123.cloud.databricks.com"
 	out := captureStdout(func() {
-		handlePrintEnv(host, "https://gw.example.com/openai/v1", "tok", "DEFAULT", "databricks-gpt-5-4", "main.codex_telemetry.codex_otel_logs")
+		handlePrintEnv(host, "https://gw.example.com/openai/v1", "tok", "DEFAULT", "databricks-gpt-5-4", "main.codex_telemetry.codex_otel_metrics", "main.codex_telemetry.codex_otel_logs")
 	})
 	if !strings.Contains(out, host) {
 		t.Errorf("expected output to contain DATABRICKS_HOST %q, got:\n%s", host, out)
@@ -462,7 +502,7 @@ func TestHandlePrintEnv_ContainsDatabricksHost(t *testing.T) {
 func TestHandlePrintEnv_ContainsOpenAIBaseURL(t *testing.T) {
 	baseURL := "https://gw.example.com/openai/v1"
 	out := captureStdout(func() {
-		handlePrintEnv("https://dbc.example.com", baseURL, "tok", "DEFAULT", "databricks-gpt-5-4", "main.codex_telemetry.codex_otel_logs")
+		handlePrintEnv("https://dbc.example.com", baseURL, "tok", "DEFAULT", "databricks-gpt-5-4", "main.codex_telemetry.codex_otel_metrics", "main.codex_telemetry.codex_otel_logs")
 	})
 	if !strings.Contains(out, baseURL) {
 		t.Errorf("expected output to contain OPENAI_BASE_URL %q, got:\n%s", baseURL, out)
@@ -471,7 +511,7 @@ func TestHandlePrintEnv_ContainsOpenAIBaseURL(t *testing.T) {
 
 func TestHandlePrintEnv_ContainsModel(t *testing.T) {
 	out := captureStdout(func() {
-		handlePrintEnv("https://dbc.example.com", "https://gw.example.com/openai/v1", "tok", "DEFAULT", "databricks-gpt-5-4-mini", "main.codex_telemetry.codex_otel_logs")
+		handlePrintEnv("https://dbc.example.com", "https://gw.example.com/openai/v1", "tok", "DEFAULT", "databricks-gpt-5-4-mini", "main.codex_telemetry.codex_otel_metrics", "main.codex_telemetry.codex_otel_logs")
 	})
 	if !strings.Contains(out, "databricks-gpt-5-4-mini") {
 		t.Errorf("expected output to contain model 'databricks-gpt-5-4-mini', got:\n%s", out)
@@ -576,50 +616,248 @@ func TestHandleHelp_ContainsVersion(t *testing.T) {
 	}
 }
 
-// --- resolveOtelLogsTable tests ---
+// --- resolveOtelLogsTable / resolveOtelMetricsTable / deriveLogsTable tests ---
 
 func TestResolveOtelLogsTable(t *testing.T) {
 	tests := []struct {
-		name       string
-		flagValue  string
-		flagSet    bool
-		savedValue string
-		want       string
+		name         string
+		flagValue    string
+		flagSet      bool
+		savedValue   string
+		metricsTable string
+		otel         bool
+		want         string
 	}{
-		{name: "flag set with value wins", flagValue: "custom.db.table", flagSet: true, want: "custom.db.table"},
-		{name: "flag set wins over saved", flagValue: "flag.table", flagSet: true, savedValue: "saved.table", want: "flag.table"},
-		{name: "saved value used when flag not set", flagSet: false, savedValue: "saved.table", want: "saved.table"},
-		{name: "default when no flag and no saved", flagSet: false, want: "main.codex_telemetry.codex_otel_logs"},
+		{name: "otel disabled returns empty", otel: false, savedValue: "saved.table", want: ""},
+		{name: "flag set with value wins", flagValue: "custom.db.table", flagSet: true, otel: true, want: "custom.db.table"},
+		{name: "flag set wins over saved", flagValue: "flag.table", flagSet: true, savedValue: "saved.table", otel: true, want: "flag.table"},
+		{name: "saved value used when flag not set", flagSet: false, savedValue: "saved.table", otel: true, want: "saved.table"},
+		{name: "derives from metrics when no flag and no saved", flagSet: false, metricsTable: "main.tel.codex_otel_metrics", otel: true, want: "main.tel.codex_otel_logs"},
+		{name: "default when no flag, saved, or metrics", flagSet: false, otel: true, want: "main.codex_telemetry.codex_otel_logs"},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := resolveOtelLogsTable(tc.flagValue, tc.flagSet, tc.savedValue)
+			got := resolveOtelLogsTable(tc.flagValue, tc.flagSet, tc.savedValue, tc.metricsTable, tc.otel)
 			if got != tc.want {
-				t.Errorf("resolveOtelLogsTable(%q, %v, %q) = %q, want %q",
-					tc.flagValue, tc.flagSet, tc.savedValue, got, tc.want)
+				t.Errorf("resolveOtelLogsTable(%q, %v, %q, %q, %v) = %q, want %q",
+					tc.flagValue, tc.flagSet, tc.savedValue, tc.metricsTable, tc.otel, got, tc.want)
 			}
 		})
 	}
 }
 
-func TestResolveOtelLogsTable_NoOtelDoesNotClear(t *testing.T) {
-	got := resolveOtelLogsTable("", false, "custom.table")
-	if got != "custom.table" {
-		t.Errorf("expected saved value to survive, got %q", got)
+func TestResolveOtelMetricsTable(t *testing.T) {
+	tests := []struct {
+		name       string
+		flagValue  string
+		flagSet    bool
+		savedValue string
+		otel       bool
+		want       string
+	}{
+		{name: "otel disabled returns empty", otel: false, savedValue: "saved.metrics", want: ""},
+		{name: "flag set wins", flagValue: "flag.metrics", flagSet: true, savedValue: "saved.metrics", otel: true, want: "flag.metrics"},
+		{name: "saved used when flag not set", flagSet: false, savedValue: "saved.metrics", otel: true, want: "saved.metrics"},
+		{name: "default when nothing set", flagSet: false, otel: true, want: "main.codex_telemetry.codex_otel_metrics"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := resolveOtelMetricsTable(tc.flagValue, tc.flagSet, tc.savedValue, tc.otel)
+			if got != tc.want {
+				t.Errorf("resolveOtelMetricsTable(%q, %v, %q, %v) = %q, want %q",
+					tc.flagValue, tc.flagSet, tc.savedValue, tc.otel, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestDeriveLogsTable(t *testing.T) {
+	tests := []struct {
+		name    string
+		metrics string
+		want    string
+	}{
+		{name: "standard _otel_metrics suffix is replaced", metrics: "main.tel.codex_otel_metrics", want: "main.tel.codex_otel_logs"},
+		{name: "custom suffix gets _otel_logs appended", metrics: "cat.schema.custom", want: "cat.schema.custom_otel_logs"},
+		{name: "empty metrics returns empty", metrics: "", want: ""},
+		{name: "bare _otel_metrics replaced", metrics: "_otel_metrics", want: "_otel_logs"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := deriveLogsTable(tc.metrics)
+			if got != tc.want {
+				t.Errorf("deriveLogsTable(%q) = %q, want %q", tc.metrics, got, tc.want)
+			}
+		})
+	}
+}
+
+// --- resolveOtel integration tests ---
+//
+// resolveOtel is the orchestration that ties flag parsing + saved state into
+// the final (otel, metricsTable, logsTable) tuple that drives config.toml
+// patching. These tests exercise the full matrix of flag combinations
+// against a populated state file, mirroring databricks-claude's behavior.
+
+func TestResolveOtel(t *testing.T) {
+	const customMetrics = "cat.schema.codex_otel_metrics"
+	const customLogs = "cat.schema.codex_otel_logs"
+
+	tests := []struct {
+		name        string
+		args        *Args
+		saved       persistentState
+		wantOtel    bool
+		wantMetrics string
+		wantLogs    string
+	}{
+		{
+			name:     "no flags, empty state: otel off, both tables empty",
+			args:     &Args{},
+			saved:    persistentState{},
+			wantOtel: false, wantMetrics: "", wantLogs: "",
+		},
+		{
+			name:        "no flags but saved tables: implicit-enable, both tables flow through",
+			args:        &Args{},
+			saved:       persistentState{OtelMetricsTable: customMetrics, OtelLogsTable: customLogs},
+			wantOtel:    true,
+			wantMetrics: customMetrics,
+			wantLogs:    customLogs,
+		},
+		{
+			name:        "--otel with empty state uses both defaults",
+			args:        &Args{Otel: true},
+			saved:       persistentState{},
+			wantOtel:    true,
+			wantMetrics: "main.codex_telemetry.codex_otel_metrics",
+			wantLogs:    "main.codex_telemetry.codex_otel_logs",
+		},
+		{
+			name:     "--no-otel with saved tables: hard off, both tables empty",
+			args:     &Args{NoOtel: true},
+			saved:    persistentState{OtelMetricsTable: customMetrics, OtelLogsTable: customLogs},
+			wantOtel: false, wantMetrics: "", wantLogs: "",
+		},
+		{
+			name:        "--no-otel-metrics with saved tables: metrics off, LOGS PRESERVED (the bug we fixed)",
+			args:        &Args{NoOtelMetrics: true},
+			saved:       persistentState{OtelMetricsTable: customMetrics, OtelLogsTable: customLogs},
+			wantOtel:    true, // implicit-enable from saved state
+			wantMetrics: "",
+			wantLogs:    customLogs,
+		},
+		{
+			name:        "--no-otel-logs with saved tables: logs off, METRICS PRESERVED",
+			args:        &Args{NoOtelLogs: true},
+			saved:       persistentState{OtelMetricsTable: customMetrics, OtelLogsTable: customLogs},
+			wantOtel:    true, // implicit-enable from saved state
+			wantMetrics: customMetrics,
+			wantLogs:    "",
+		},
+		{
+			name:        "--otel --no-otel-metrics: explicit on + metrics-off, logs default applies",
+			args:        &Args{Otel: true, NoOtelMetrics: true},
+			saved:       persistentState{},
+			wantOtel:    true,
+			wantMetrics: "",
+			wantLogs:    "main.codex_telemetry.codex_otel_logs",
+		},
+		{
+			name:        "--otel --no-otel-logs: explicit on + logs-off, metrics default applies",
+			args:        &Args{Otel: true, NoOtelLogs: true},
+			saved:       persistentState{},
+			wantOtel:    true,
+			wantMetrics: "main.codex_telemetry.codex_otel_metrics",
+			wantLogs:    "",
+		},
+		{
+			name: "explicit --otel-metrics-table flag implicit-enables otel even without --otel",
+			args: &Args{
+				OtelMetricsTable:    customMetrics,
+				OtelMetricsTableSet: true,
+			},
+			saved:       persistentState{},
+			wantOtel:    true,
+			wantMetrics: customMetrics,
+			wantLogs:    "cat.schema.codex_otel_logs", // derived
+		},
+		{
+			name:     "--no-otel beats everything else (even an explicit metrics flag)",
+			args:     &Args{NoOtel: true, OtelMetricsTable: customMetrics, OtelMetricsTableSet: true},
+			saved:    persistentState{},
+			wantOtel: false, wantMetrics: "", wantLogs: "",
+		},
+		{
+			name:        "--no-otel-metrics + --no-otel-logs with saved tables: both off, but otel stays implicit-on",
+			args:        &Args{NoOtelMetrics: true, NoOtelLogs: true},
+			saved:       persistentState{OtelMetricsTable: customMetrics, OtelLogsTable: customLogs},
+			wantOtel:    true,
+			wantMetrics: "",
+			wantLogs:    "",
+		},
+		{
+			name:        "saved metrics only: implicit-enable, logs derived from metrics",
+			args:        &Args{},
+			saved:       persistentState{OtelMetricsTable: customMetrics},
+			wantOtel:    true,
+			wantMetrics: customMetrics,
+			wantLogs:    "cat.schema.codex_otel_logs",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			otel, metrics, logs := resolveOtel(tc.args, tc.saved)
+			if otel != tc.wantOtel {
+				t.Errorf("otel: got %v, want %v", otel, tc.wantOtel)
+			}
+			if metrics != tc.wantMetrics {
+				t.Errorf("metricsTable: got %q, want %q", metrics, tc.wantMetrics)
+			}
+			if logs != tc.wantLogs {
+				t.Errorf("logsTable: got %q, want %q", logs, tc.wantLogs)
+			}
+		})
 	}
 }
 
 func TestHandlePrintEnv_ContainsOtelLogsTable(t *testing.T) {
 	table := "main.custom.otel_logs"
 	out := captureStdout(func() {
-		handlePrintEnv("https://dbc.example.com", "https://gw.example.com/openai/v1", "tok", "DEFAULT", "databricks-gpt-5-4", table)
+		handlePrintEnv("https://dbc.example.com", "https://gw.example.com/openai/v1", "tok", "DEFAULT", "databricks-gpt-5-4", "main.codex_telemetry.codex_otel_metrics", table)
 	})
 	if !strings.Contains(out, table) {
 		t.Errorf("expected output to contain OTEL Logs Table %q, got:\n%s", table, out)
 	}
 	if !strings.Contains(out, "OTEL Logs Table:") {
 		t.Errorf("expected output to contain 'OTEL Logs Table:' label, got:\n%s", out)
+	}
+}
+
+func TestHandlePrintEnv_ContainsOtelMetricsTable(t *testing.T) {
+	table := "main.custom.otel_metrics"
+	out := captureStdout(func() {
+		handlePrintEnv("https://dbc.example.com", "https://gw.example.com/openai/v1", "tok", "DEFAULT", "databricks-gpt-5-4", table, "main.codex_telemetry.codex_otel_logs")
+	})
+	if !strings.Contains(out, table) {
+		t.Errorf("expected output to contain OTEL Metrics Table %q, got:\n%s", table, out)
+	}
+	if !strings.Contains(out, "OTEL Metrics Table:") {
+		t.Errorf("expected output to contain 'OTEL Metrics Table:' label, got:\n%s", out)
+	}
+}
+
+func TestHandlePrintEnv_DisabledTablesRenderAsDisabled(t *testing.T) {
+	out := captureStdout(func() {
+		handlePrintEnv("https://dbc.example.com", "https://gw.example.com/openai/v1", "tok", "DEFAULT", "databricks-gpt-5-4", "", "")
+	})
+	if !strings.Contains(out, "OTEL Metrics Table:  (disabled)") {
+		t.Errorf("expected '(disabled)' for metrics table when empty, got:\n%s", out)
+	}
+	if !strings.Contains(out, "OTEL Logs Table:     (disabled)") {
+		t.Errorf("expected '(disabled)' for logs table when empty, got:\n%s", out)
 	}
 }
 
