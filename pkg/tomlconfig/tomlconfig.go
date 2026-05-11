@@ -14,7 +14,7 @@ import (
 // PatchConfig holds the values to inject into config.toml.
 type PatchConfig struct {
 	ProxyURL            string // e.g., "http://127.0.0.1:54321"
-	Model               string // e.g., "databricks-gpt-5-4"
+	Model               string // e.g., "databricks-gpt-5-5"
 	ModelExplicit       bool   // true when --model was explicitly passed
 	OTELLogsEndpoint    string // e.g., "http://127.0.0.1:54321/otel/v1/logs"
 	OTELMetricsEndpoint string // e.g., "http://127.0.0.1:54321/otel/v1/metrics"

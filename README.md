@@ -94,7 +94,7 @@ databricks-codex --upstream https://adb-123456789.azuredatabricks.net/ai-gateway
 | `--no-otel-metrics` | | Disable metrics for this session (saved table preserved) |
 | `--no-otel-logs` | | Disable logs for this session (saved table preserved) |
 | `--profile` | saved/`DEFAULT` | Databricks CLI profile (saved to state file; `--profile` flag writes it once) |
-| `--model` | `databricks-gpt-5-4` | Model to use (saved for future sessions) |
+| `--model` | `databricks-gpt-5-5` | Model to use (saved for future sessions) |
 | `--port` | `49154` | Proxy listen port (saved for future sessions) |
 | `--upstream` | auto-discovered | Override the upstream inference URL the local proxy forwards to |
 | `--proxy-api-key` | disabled | Require this API key on all local proxy requests |

@@ -457,7 +457,7 @@ func TestHandlePrintEnv_RedactsAllTokenShapes(t *testing.T) {
 	for _, token := range tokens {
 		t.Run(fmt.Sprintf("token=%q", token), func(t *testing.T) {
 			out := captureStdout(func() {
-				handlePrintEnv("https://dbc.example.com", "https://gw.example.com/openai/v1", token, "DEFAULT", "databricks-gpt-5-4", "main.codex_telemetry.codex_otel_metrics", "main.codex_telemetry.codex_otel_logs")
+				handlePrintEnv("https://dbc.example.com", "https://gw.example.com/openai/v1", token, "DEFAULT", "databricks-gpt-5-5", "main.codex_telemetry.codex_otel_metrics", "main.codex_telemetry.codex_otel_logs")
 			})
 			if !strings.Contains(out, "**** (redacted)") {
 				t.Errorf("expected '**** (redacted)' in output, got:\n%s", out)
@@ -473,7 +473,7 @@ func TestHandlePrintEnv_NoLegacyDapiPrefix(t *testing.T) {
 	// Per #71, the legacy "dapi-***" branch was removed in favour of a single
 	// fixed redaction. Make sure no output ever contains the legacy form.
 	out := captureStdout(func() {
-		handlePrintEnv("https://dbc.example.com", "https://gw.example.com/openai/v1", "dapi-abc123", "DEFAULT", "databricks-gpt-5-4", "main.codex_telemetry.codex_otel_metrics", "main.codex_telemetry.codex_otel_logs")
+		handlePrintEnv("https://dbc.example.com", "https://gw.example.com/openai/v1", "dapi-abc123", "DEFAULT", "databricks-gpt-5-5", "main.codex_telemetry.codex_otel_metrics", "main.codex_telemetry.codex_otel_logs")
 	})
 	if strings.Contains(out, "dapi-***") {
 		t.Errorf("legacy 'dapi-***' redaction marker should be gone, got:\n%s", out)
@@ -482,7 +482,7 @@ func TestHandlePrintEnv_NoLegacyDapiPrefix(t *testing.T) {
 
 func TestHandlePrintEnv_ContainsProfile(t *testing.T) {
 	out := captureStdout(func() {
-		handlePrintEnv("https://dbc.example.com", "https://gw.example.com/openai/v1", "tok", "aidev", "databricks-gpt-5-4", "main.codex_telemetry.codex_otel_metrics", "main.codex_telemetry.codex_otel_logs")
+		handlePrintEnv("https://dbc.example.com", "https://gw.example.com/openai/v1", "tok", "aidev", "databricks-gpt-5-5", "main.codex_telemetry.codex_otel_metrics", "main.codex_telemetry.codex_otel_logs")
 	})
 	if !strings.Contains(out, "aidev") {
 		t.Errorf("expected output to contain profile 'aidev', got:\n%s", out)
@@ -492,7 +492,7 @@ func TestHandlePrintEnv_ContainsProfile(t *testing.T) {
 func TestHandlePrintEnv_ContainsDatabricksHost(t *testing.T) {
 	host := "https://dbc-abc123.cloud.databricks.com"
 	out := captureStdout(func() {
-		handlePrintEnv(host, "https://gw.example.com/openai/v1", "tok", "DEFAULT", "databricks-gpt-5-4", "main.codex_telemetry.codex_otel_metrics", "main.codex_telemetry.codex_otel_logs")
+		handlePrintEnv(host, "https://gw.example.com/openai/v1", "tok", "DEFAULT", "databricks-gpt-5-5", "main.codex_telemetry.codex_otel_metrics", "main.codex_telemetry.codex_otel_logs")
 	})
 	if !strings.Contains(out, host) {
 		t.Errorf("expected output to contain DATABRICKS_HOST %q, got:\n%s", host, out)
@@ -502,7 +502,7 @@ func TestHandlePrintEnv_ContainsDatabricksHost(t *testing.T) {
 func TestHandlePrintEnv_ContainsOpenAIBaseURL(t *testing.T) {
 	baseURL := "https://gw.example.com/openai/v1"
 	out := captureStdout(func() {
-		handlePrintEnv("https://dbc.example.com", baseURL, "tok", "DEFAULT", "databricks-gpt-5-4", "main.codex_telemetry.codex_otel_metrics", "main.codex_telemetry.codex_otel_logs")
+		handlePrintEnv("https://dbc.example.com", baseURL, "tok", "DEFAULT", "databricks-gpt-5-5", "main.codex_telemetry.codex_otel_metrics", "main.codex_telemetry.codex_otel_logs")
 	})
 	if !strings.Contains(out, baseURL) {
 		t.Errorf("expected output to contain OPENAI_BASE_URL %q, got:\n%s", baseURL, out)
@@ -826,7 +826,7 @@ func TestResolveOtel(t *testing.T) {
 func TestHandlePrintEnv_ContainsOtelLogsTable(t *testing.T) {
 	table := "main.custom.otel_logs"
 	out := captureStdout(func() {
-		handlePrintEnv("https://dbc.example.com", "https://gw.example.com/openai/v1", "tok", "DEFAULT", "databricks-gpt-5-4", "main.codex_telemetry.codex_otel_metrics", table)
+		handlePrintEnv("https://dbc.example.com", "https://gw.example.com/openai/v1", "tok", "DEFAULT", "databricks-gpt-5-5", "main.codex_telemetry.codex_otel_metrics", table)
 	})
 	if !strings.Contains(out, table) {
 		t.Errorf("expected output to contain OTEL Logs Table %q, got:\n%s", table, out)
@@ -839,7 +839,7 @@ func TestHandlePrintEnv_ContainsOtelLogsTable(t *testing.T) {
 func TestHandlePrintEnv_ContainsOtelMetricsTable(t *testing.T) {
 	table := "main.custom.otel_metrics"
 	out := captureStdout(func() {
-		handlePrintEnv("https://dbc.example.com", "https://gw.example.com/openai/v1", "tok", "DEFAULT", "databricks-gpt-5-4", table, "main.codex_telemetry.codex_otel_logs")
+		handlePrintEnv("https://dbc.example.com", "https://gw.example.com/openai/v1", "tok", "DEFAULT", "databricks-gpt-5-5", table, "main.codex_telemetry.codex_otel_logs")
 	})
 	if !strings.Contains(out, table) {
 		t.Errorf("expected output to contain OTEL Metrics Table %q, got:\n%s", table, out)
@@ -851,7 +851,7 @@ func TestHandlePrintEnv_ContainsOtelMetricsTable(t *testing.T) {
 
 func TestHandlePrintEnv_DisabledTablesRenderAsDisabled(t *testing.T) {
 	out := captureStdout(func() {
-		handlePrintEnv("https://dbc.example.com", "https://gw.example.com/openai/v1", "tok", "DEFAULT", "databricks-gpt-5-4", "", "")
+		handlePrintEnv("https://dbc.example.com", "https://gw.example.com/openai/v1", "tok", "DEFAULT", "databricks-gpt-5-5", "", "")
 	})
 	if !strings.Contains(out, "OTEL Metrics Table:  (disabled)") {
 		t.Errorf("expected '(disabled)' for metrics table when empty, got:\n%s", out)
@@ -971,5 +971,23 @@ func TestKnownFlagsCoverAllFlagDefs(t *testing.T) {
 		if !knownFlags[name] {
 			t.Errorf("flagDef %q is missing from knownFlags in completion_flags.go", name)
 		}
+	}
+}
+
+// TestResolveModel_DefaultIsGpt5_5 locks the built-in default model against
+// silent drift. When no flag is passed and saved state is empty, resolveModel
+// must return databricks-gpt-5-5. Bumping the default requires updating this
+// test in the same commit, which serves as an explicit checkpoint.
+func TestResolveModel_DefaultIsGpt5_5(t *testing.T) {
+	dir := t.TempDir()
+	orig := statePath
+	statePath = func() string { return filepath.Join(dir, "state.json") }
+	defer func() { statePath = orig }()
+
+	// Empty saved state + no flag + no env → built-in default fires.
+	got := resolveModel("", loadState().Model)
+	want := "databricks-gpt-5-5"
+	if got != want {
+		t.Errorf("resolveModel default = %q, want %q", got, want)
 	}
 }
