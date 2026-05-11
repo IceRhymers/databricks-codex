@@ -229,50 +229,31 @@ func main() {
 	log.Printf("databricks-codex: gateway URL: %s", gatewayURL)
 
 	// --- OTEL tables ---
-	// Mirror databricks-claude's semantic: --no-otel and --no-otel-{metrics,logs}
-	// disable the matching signal at runtime (so the [otel] section in
-	// ~/.codex/config.toml omits the relevant exporter), but the saved
-	// table preference in ~/.codex/.databricks-codex.json is left intact
-	// so it comes back the next time the user enables that signal.
-	otel := a.Otel
-	if a.NoOtel {
-		otel = false
-	}
+	// Compute the final (otel, metricsTable, logsTable) tuple from flags + state.
+	// Saved state is read once and passed in so the helper is pure & testable.
+	saved := loadState()
+	otel, otelMetricsTable, otelLogsTable := resolveOtel(a, saved)
 
-	// Resolve metrics table: --otel-metrics-table flag → saved state → default (only when --otel set).
-	// --no-otel-metrics forces metrics off for this session, regardless of --otel.
-	otelMetricsTableExplicit := a.OtelMetricsTableSet
-	var otelMetricsTable string
-	if !a.NoOtelMetrics {
-		otelMetricsTable = resolveOtelMetricsTable(a.OtelMetricsTable, a.OtelMetricsTableSet, loadState().OtelMetricsTable, otel)
-	}
-	if !otelMetricsTableExplicit && otelMetricsTable != "" && otelMetricsTable != "main.codex_telemetry.codex_otel_metrics" {
+	// Log informational lines and persist any explicit table flags.
+	if !a.OtelMetricsTableSet && otelMetricsTable != "" && otelMetricsTable != "main.codex_telemetry.codex_otel_metrics" {
 		log.Printf("databricks-codex: using saved otel-metrics-table: %s", otelMetricsTable)
 	}
-	if otelMetricsTableExplicit {
-		saved := loadState()
-		saved.OtelMetricsTable = otelMetricsTable
-		if err := saveState(saved); err != nil {
+	if a.OtelMetricsTableSet {
+		s := loadState()
+		s.OtelMetricsTable = otelMetricsTable
+		if err := saveState(s); err != nil {
 			log.Printf("databricks-codex: failed to save otel-metrics-table: %v", err)
 		} else {
 			log.Printf("databricks-codex: saved otel-metrics-table %q for future sessions", otelMetricsTable)
 		}
 	}
-
-	// Resolve logs table: --otel-logs-table flag → saved state → derive-from-metrics → default.
-	// --no-otel-logs forces logs off for this session, regardless of --otel.
-	otelLogsTableExplicit := a.OtelLogsTableSet
-	var otelLogsTable string
-	if !a.NoOtelLogs {
-		otelLogsTable = resolveOtelLogsTable(a.OtelLogsTable, a.OtelLogsTableSet, loadState().OtelLogsTable, otelMetricsTable, otel)
-	}
-	if !otelLogsTableExplicit && otelLogsTable != "" && otelLogsTable != "main.codex_telemetry.codex_otel_logs" {
+	if !a.OtelLogsTableSet && otelLogsTable != "" && otelLogsTable != "main.codex_telemetry.codex_otel_logs" {
 		log.Printf("databricks-codex: using saved otel-logs-table: %s", otelLogsTable)
 	}
-	if otelLogsTableExplicit {
-		saved := loadState()
-		saved.OtelLogsTable = otelLogsTable
-		if err := saveState(saved); err != nil {
+	if a.OtelLogsTableSet {
+		s := loadState()
+		s.OtelLogsTable = otelLogsTable
+		if err := saveState(s); err != nil {
 			log.Printf("databricks-codex: failed to save otel-logs-table: %v", err)
 		} else {
 			log.Printf("databricks-codex: saved otel-logs-table %q for future sessions", otelLogsTable)
@@ -781,6 +762,40 @@ func resolveProfile(flagValue string, savedValue string) string {
 		return savedValue
 	}
 	return "DEFAULT"
+}
+
+// resolveOtel is the orchestration: given parsed flags + saved state, decide
+// whether OTel is on for this session and which (metrics, logs) tables to use.
+//
+// Semantics mirror databricks-claude:
+//
+//	OTel is "on" if any of: --otel, --otel-metrics-table, --otel-logs-table,
+//	or saved state has any table set — UNLESS --no-otel was passed, which
+//	is the unconditional kill switch.
+//
+//	--no-otel-metrics / --no-otel-logs disable that specific signal for the
+//	current session but leave OTel itself on (so the other signal keeps
+//	exporting) and leave the saved table preference intact.
+//
+// Both returned table strings are empty when their signal is disabled.
+func resolveOtel(a *Args, saved persistentState) (otel bool, metricsTable string, logsTable string) {
+	otel = a.Otel
+	if !otel && !a.NoOtel {
+		if a.OtelMetricsTableSet || a.OtelLogsTableSet || saved.OtelMetricsTable != "" || saved.OtelLogsTable != "" {
+			otel = true
+		}
+	}
+	if a.NoOtel {
+		otel = false
+	}
+
+	if !a.NoOtelMetrics {
+		metricsTable = resolveOtelMetricsTable(a.OtelMetricsTable, a.OtelMetricsTableSet, saved.OtelMetricsTable, otel)
+	}
+	if !a.NoOtelLogs {
+		logsTable = resolveOtelLogsTable(a.OtelLogsTable, a.OtelLogsTableSet, saved.OtelLogsTable, metricsTable, otel)
+	}
+	return otel, metricsTable, logsTable
 }
 
 // resolveOtelLogsTable returns the OTEL logs table using the resolution chain:

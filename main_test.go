@@ -693,6 +693,136 @@ func TestDeriveLogsTable(t *testing.T) {
 	}
 }
 
+// --- resolveOtel integration tests ---
+//
+// resolveOtel is the orchestration that ties flag parsing + saved state into
+// the final (otel, metricsTable, logsTable) tuple that drives config.toml
+// patching. These tests exercise the full matrix of flag combinations
+// against a populated state file, mirroring databricks-claude's behavior.
+
+func TestResolveOtel(t *testing.T) {
+	const customMetrics = "cat.schema.codex_otel_metrics"
+	const customLogs = "cat.schema.codex_otel_logs"
+
+	tests := []struct {
+		name        string
+		args        *Args
+		saved       persistentState
+		wantOtel    bool
+		wantMetrics string
+		wantLogs    string
+	}{
+		{
+			name:     "no flags, empty state: otel off, both tables empty",
+			args:     &Args{},
+			saved:    persistentState{},
+			wantOtel: false, wantMetrics: "", wantLogs: "",
+		},
+		{
+			name:        "no flags but saved tables: implicit-enable, both tables flow through",
+			args:        &Args{},
+			saved:       persistentState{OtelMetricsTable: customMetrics, OtelLogsTable: customLogs},
+			wantOtel:    true,
+			wantMetrics: customMetrics,
+			wantLogs:    customLogs,
+		},
+		{
+			name:        "--otel with empty state uses both defaults",
+			args:        &Args{Otel: true},
+			saved:       persistentState{},
+			wantOtel:    true,
+			wantMetrics: "main.codex_telemetry.codex_otel_metrics",
+			wantLogs:    "main.codex_telemetry.codex_otel_logs",
+		},
+		{
+			name:     "--no-otel with saved tables: hard off, both tables empty",
+			args:     &Args{NoOtel: true},
+			saved:    persistentState{OtelMetricsTable: customMetrics, OtelLogsTable: customLogs},
+			wantOtel: false, wantMetrics: "", wantLogs: "",
+		},
+		{
+			name:        "--no-otel-metrics with saved tables: metrics off, LOGS PRESERVED (the bug we fixed)",
+			args:        &Args{NoOtelMetrics: true},
+			saved:       persistentState{OtelMetricsTable: customMetrics, OtelLogsTable: customLogs},
+			wantOtel:    true, // implicit-enable from saved state
+			wantMetrics: "",
+			wantLogs:    customLogs,
+		},
+		{
+			name:        "--no-otel-logs with saved tables: logs off, METRICS PRESERVED",
+			args:        &Args{NoOtelLogs: true},
+			saved:       persistentState{OtelMetricsTable: customMetrics, OtelLogsTable: customLogs},
+			wantOtel:    true, // implicit-enable from saved state
+			wantMetrics: customMetrics,
+			wantLogs:    "",
+		},
+		{
+			name:        "--otel --no-otel-metrics: explicit on + metrics-off, logs default applies",
+			args:        &Args{Otel: true, NoOtelMetrics: true},
+			saved:       persistentState{},
+			wantOtel:    true,
+			wantMetrics: "",
+			wantLogs:    "main.codex_telemetry.codex_otel_logs",
+		},
+		{
+			name:        "--otel --no-otel-logs: explicit on + logs-off, metrics default applies",
+			args:        &Args{Otel: true, NoOtelLogs: true},
+			saved:       persistentState{},
+			wantOtel:    true,
+			wantMetrics: "main.codex_telemetry.codex_otel_metrics",
+			wantLogs:    "",
+		},
+		{
+			name: "explicit --otel-metrics-table flag implicit-enables otel even without --otel",
+			args: &Args{
+				OtelMetricsTable:    customMetrics,
+				OtelMetricsTableSet: true,
+			},
+			saved:       persistentState{},
+			wantOtel:    true,
+			wantMetrics: customMetrics,
+			wantLogs:    "cat.schema.codex_otel_logs", // derived
+		},
+		{
+			name:     "--no-otel beats everything else (even an explicit metrics flag)",
+			args:     &Args{NoOtel: true, OtelMetricsTable: customMetrics, OtelMetricsTableSet: true},
+			saved:    persistentState{},
+			wantOtel: false, wantMetrics: "", wantLogs: "",
+		},
+		{
+			name:        "--no-otel-metrics + --no-otel-logs with saved tables: both off, but otel stays implicit-on",
+			args:        &Args{NoOtelMetrics: true, NoOtelLogs: true},
+			saved:       persistentState{OtelMetricsTable: customMetrics, OtelLogsTable: customLogs},
+			wantOtel:    true,
+			wantMetrics: "",
+			wantLogs:    "",
+		},
+		{
+			name:        "saved metrics only: implicit-enable, logs derived from metrics",
+			args:        &Args{},
+			saved:       persistentState{OtelMetricsTable: customMetrics},
+			wantOtel:    true,
+			wantMetrics: customMetrics,
+			wantLogs:    "cat.schema.codex_otel_logs",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			otel, metrics, logs := resolveOtel(tc.args, tc.saved)
+			if otel != tc.wantOtel {
+				t.Errorf("otel: got %v, want %v", otel, tc.wantOtel)
+			}
+			if metrics != tc.wantMetrics {
+				t.Errorf("metricsTable: got %q, want %q", metrics, tc.wantMetrics)
+			}
+			if logs != tc.wantLogs {
+				t.Errorf("logsTable: got %q, want %q", logs, tc.wantLogs)
+			}
+		})
+	}
+}
+
 func TestHandlePrintEnv_ContainsOtelLogsTable(t *testing.T) {
 	table := "main.custom.otel_logs"
 	out := captureStdout(func() {
