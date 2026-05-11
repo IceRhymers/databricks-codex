@@ -113,9 +113,16 @@ func (m *Manager) Patch(cfg PatchConfig) error {
 	content = m.patchSection(content, "model_providers.databricks-proxy",
 		m.buildProviderSection(cfg))
 
+	// Always handle the [otel] section: when both endpoints are set, patch
+	// it; when both are empty, remove it if it exists. This makes --no-otel
+	// (or --no-otel-metrics/--no-otel-logs that clears the last remaining
+	// signal) actually erase the section from config.toml — not just leave
+	// stale exporter lines behind.
 	if cfg.OTELLogsEndpoint != "" || cfg.OTELMetricsEndpoint != "" {
 		content = m.patchSection(content, "otel",
 			m.buildOTELSection(cfg))
+	} else {
+		content = m.removeSection(content, "otel")
 	}
 
 	if err := atomicWrite(m.configPath, []byte(content)); err != nil {
@@ -225,6 +232,66 @@ func (m *Manager) patchRootKey(content, key, value string) string {
 		lines = insertAt(lines, insertIdx, newLine)
 	}
 	return strings.Join(lines, "\n")
+}
+
+// removeSection finds a [section] in the content and removes it entirely
+// (header + body up to the next section header or EOF). The original block
+// is recorded in origSections so Restore() can put it back.
+//
+// If the section is not present, this is a no-op — and crucially, we do
+// NOT record a sentinel, because there's nothing to undo on Restore().
+func (m *Manager) removeSection(content, sectionName string) string {
+	header := "[" + sectionName + "]"
+	lines := strings.Split(content, "\n")
+
+	startIdx := -1
+	for i, line := range lines {
+		if strings.TrimSpace(line) == header {
+			startIdx = i
+			break
+		}
+	}
+
+	if startIdx == -1 {
+		// Section absent — nothing to remove, nothing to track.
+		return content
+	}
+
+	// Find section end (next section header or EOF).
+	endIdx := len(lines)
+	for i := startIdx + 1; i < len(lines); i++ {
+		trimmed := strings.TrimSpace(lines[i])
+		if strings.HasPrefix(trimmed, "[") && !strings.HasPrefix(trimmed, "[[") {
+			endIdx = i
+			break
+		}
+	}
+
+	// Save original block so Restore() can put it back if needed.
+	m.origSections[sectionName] = strings.Join(lines[startIdx:endIdx], "\n")
+
+	// Also drop the trailing blank line that typically separates sections,
+	// so removing [otel] doesn't leave a double-blank gap behind. Only do
+	// this if endIdx is followed by a blank line (i.e. we're removing a
+	// mid-file section, not a trailing one).
+	if endIdx < len(lines) && strings.TrimSpace(lines[endIdx-1]) == "" {
+		// endIdx-1 is already a blank line inside the section we're
+		// removing — nothing extra to do.
+	} else if endIdx < len(lines) && strings.TrimSpace(lines[endIdx]) == "" {
+		// The line right after the section is blank — consume it.
+		endIdx++
+	}
+	// Also drop a blank line immediately BEFORE the section if present,
+	// so we don't leave a dangling separator.
+	if startIdx > 0 && strings.TrimSpace(lines[startIdx-1]) == "" {
+		startIdx--
+	}
+
+	newLines := make([]string, 0, len(lines))
+	newLines = append(newLines, lines[:startIdx]...)
+	newLines = append(newLines, lines[endIdx:]...)
+
+	return strings.Join(newLines, "\n")
 }
 
 // patchSection finds a [section] in the content, saves its original block,
