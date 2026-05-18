@@ -2,49 +2,69 @@ package main
 
 import "github.com/IceRhymers/databricks-claude/pkg/completion"
 
-// flagDefs is the authoritative list of flags owned by databricks-codex.
-// Everything not listed here is forwarded transparently to the codex binary.
+// flagDefs is the ordered list of root flags fed to pkg/completion for
+// shell-script generation. Order is curated here (not implied by the tree)
+// because bash/zsh/fish completion output is order-sensitive — preserving
+// byte-equivalence with the pre-tree binary requires the original ordering
+// (--profile first, --port between --tls-key and --headless, etc.). Each
+// entry is derived from rootCommand so the tree remains the single source
+// of truth for which flags exist and what their descriptions / completers /
+// arg semantics are.
 //
-// Rules:
-//   - TakesArg: true  → the next token is consumed as the flag's value
-//   - TakesArg: false → the flag is a boolean toggle
-//   - Completer: "__databricks_profiles" → completes from ~/.databrickscfg sections
-//   - Completer: "__files"              → completes with local file paths
-//   - Short: "x"                        → also accepts -x as a short alias
-var flagDefs = []completion.FlagDef{
-	{Name: "profile", Description: "Databricks CLI profile (default: DEFAULT)", TakesArg: true, Completer: "__databricks_profiles"},
-	{Name: "verbose", Short: "v", Description: "Enable debug logging to stderr"},
-	{Name: "version", Description: "Print version and exit"},
-	{Name: "help", Short: "h", Description: "Show help message"},
-	{Name: "print-env", Description: "Print resolved configuration (token redacted) and exit"},
-	{Name: "otel", Description: "Enable OpenTelemetry export (metrics + logs)"},
-	{Name: "no-otel", Description: "Disable OpenTelemetry for this session (saved tables preserved)"},
-	{Name: "no-otel-metrics", Description: "Disable metrics for this session (saved table preserved)"},
-	{Name: "no-otel-logs", Description: "Disable logs for this session (saved table preserved)"},
-	{Name: "otel-metrics-table", Description: "Unity Catalog table for OTel metrics (cat.schema.table)", TakesArg: true},
-	{Name: "otel-logs-table", Description: "Unity Catalog table for OTel logs (cat.schema.table)", TakesArg: true},
-	{Name: "model", Description: "Model to use (default: databricks-claude-sonnet-4-5)", TakesArg: true},
-	{Name: "upstream", Description: "Override upstream codex binary path", TakesArg: true, Completer: "__files"},
-	{Name: "log-file", Description: "Write debug logs to file (combinable with --verbose)", TakesArg: true, Completer: "__files"},
-	{Name: "proxy-api-key", Description: "Require this API key on all proxy requests", TakesArg: true},
-	{Name: "tls-cert", Description: "TLS certificate file for the local proxy (requires --tls-key)", TakesArg: true, Completer: "__files"},
-	{Name: "tls-key", Description: "TLS private key file for the local proxy (requires --tls-cert)", TakesArg: true, Completer: "__files"},
-	{Name: "port", Description: "Proxy listen port (default: 49154)", TakesArg: true},
-	{Name: "headless", Description: "Start proxy without launching codex (for IDE extensions or hooks)"},
-	{Name: "idle-timeout", Description: "Idle timeout for headless mode (default: 30m; 0 disables)", TakesArg: true},
-	{Name: "install-hooks", Description: "Install SessionStart hook into ~/.codex/hooks.json"},
-	{Name: "uninstall-hooks", Description: "Remove databricks-codex hooks from ~/.codex/hooks.json"},
-	{Name: "headless-ensure", Description: "Start proxy if not running — called by the SessionStart hook"},
-	{Name: "no-update-check", Description: "Skip the automatic update check on startup"},
-}
+// Adding a new root flag requires:
+//  1. Append a FlagDef to rootCommand.Flags (or .Persistent) in commands.go.
+//  2. Insert the new flag's name into the order slice below at the desired
+//     position in the completion output.
+// The init-time panic and the parity tests in main_test.go fail loudly if
+// step 2 is forgotten or if a name in `order` doesn't appear on rootCommand.
+var flagDefs = func() []completion.FlagDef {
+	// Original flagDefs ordering, preserved verbatim for byte-equivalent
+	// completion script generation. Two flags now live on rootCommand.Persistent
+	// (--profile, --port); the rest are on rootCommand.Flags. Their ordering
+	// here is independent of that partitioning.
+	order := []string{
+		"profile",
+		"verbose",
+		"version",
+		"help",
+		"print-env",
+		"otel",
+		"no-otel",
+		"no-otel-metrics",
+		"no-otel-logs",
+		"otel-metrics-table",
+		"otel-logs-table",
+		"model",
+		"upstream",
+		"log-file",
+		"proxy-api-key",
+		"tls-cert",
+		"tls-key",
+		"port",
+		"headless",
+		"idle-timeout",
+		"install-hooks",
+		"uninstall-hooks",
+		"headless-ensure",
+		"no-update-check",
+	}
+	byName := map[string]completion.FlagDef{}
+	for _, f := range rootCommand.AllFlags() {
+		byName[f.Name] = f.ToCompletion()
+	}
+	out := make([]completion.FlagDef, 0, len(order))
+	for _, name := range order {
+		f, ok := byName[name]
+		if !ok {
+			panic("completion_flags: order entry " + name + " not declared on rootCommand")
+		}
+		out = append(out, f)
+	}
+	return out
+}()
 
 // knownFlags is the set of flag names (with "--" prefix) that databricks-codex
-// owns. Anything not in this set is forwarded to the codex binary.
-// Derived from flagDefs so it can never drift from the completion script.
-var knownFlags = func() map[string]bool {
-	m := make(map[string]bool, len(flagDefs))
-	for _, f := range flagDefs {
-		m["--"+f.Name] = true
-	}
-	return m
-}()
+// owns. Anything not in this set is forwarded to the codex binary. Derived
+// directly from rootCommand so it can never drift from the tree — the tree
+// is the source of truth for which flags the binary recognises.
+var knownFlags = rootCommand.KnownFlags()

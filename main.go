@@ -625,6 +625,15 @@ func parseArgs(args []string) (*Args, error) {
 					a.HeadlessEnsureFlag = true
 				case "--no-update-check":
 					a.NoUpdateCheck = true
+				default:
+					// A name in knownFlags must have a corresponding case
+					// above; this arm catches the case where rootCommand
+					// declares a new flag but parseArgs hasn't been updated.
+					// Loud failure beats silent passthrough — the bidirectional
+					// parity test in main_test.go also detects this drift,
+					// but a runtime check catches it for any caller path the
+					// test doesn't exercise.
+					return nil, fmt.Errorf("internal: %s is a known flag but parseArgs has no case for it", name)
 				}
 				i++
 				continue
