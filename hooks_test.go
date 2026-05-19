@@ -441,17 +441,23 @@ func splitLines(s string) []string {
 }
 
 // TestIsDBXHookEntry verifies detection of databricks-codex hook entries.
+// Covers both the legacy --headless-* spellings (entries left over from
+// pre-#88 installs) and the new `hooks` subcommand spellings, so a
+// re-install or uninstall replaces both cleanly.
 func TestIsDBXHookEntry(t *testing.T) {
 	tests := []struct {
 		name string
 		cmd  string
 		want bool
 	}{
-		{"ensure command", "databricks-codex --headless-ensure", true},
-		{"release command", "databricks-codex --headless-release", true},
-		{"headless base", "databricks-codex --headless", true},
+		{"legacy ensure command", "databricks-codex --headless-ensure", true},
+		{"legacy release command", "databricks-codex --headless-release", true},
+		{"legacy headless base", "databricks-codex --headless", true},
+		{"new session-start command", "databricks-codex hooks session-start", true},
+		{"new install command", "databricks-codex hooks install", true},
 		{"unrelated command", "my-custom-hook", false},
 		{"partial match", "databricks-codex --help", false},
+		{"hooks-prefixed unrelated", "databricks-codex hooksy-thing", false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

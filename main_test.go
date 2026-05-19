@@ -22,6 +22,20 @@ func mustParseArgs(t *testing.T, args []string) *Args {
 	return a
 }
 
+// equalStringSlice reports whether a and b have the same length and same
+// elements in order. nil and empty slices are treated equal.
+func equalStringSlice(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
 // --- parseArgs tests ---
 
 func TestParseArgs_HelpLong(t *testing.T) {
@@ -342,10 +356,24 @@ func TestParseArgs_Table(t *testing.T) {
 		{name: "--model", args: []string{"--model", "my-model"}, want: Args{Model: "my-model", ModelSet: true}},
 		{name: "--port", args: []string{"--port", "9999"}, want: Args{PortFlag: 9999}},
 		{name: "--headless", args: []string{"--headless"}, want: Args{Headless: true}},
-		{name: "--install-hooks", args: []string{"--install-hooks"}, want: Args{InstallHooksFlag: true}},
-		{name: "--uninstall-hooks", args: []string{"--uninstall-hooks"}, want: Args{UninstallHooksFlag: true}},
-		{name: "--headless-ensure", args: []string{"--headless-ensure"}, want: Args{HeadlessEnsureFlag: true}},
 		{name: "--no-update-check", args: []string{"--no-update-check"}, want: Args{NoUpdateCheck: true}},
+		{
+			// #88 removed --install-hooks; the legacy flag is no longer in
+			// knownFlags, so parseArgs forwards it to codex unchanged.
+			name: "legacy --install-hooks now passes through to codex",
+			args: []string{"--install-hooks"},
+			want: Args{CodexArgs: []string{"--install-hooks"}},
+		},
+		{
+			name: "legacy --uninstall-hooks now passes through to codex",
+			args: []string{"--uninstall-hooks"},
+			want: Args{CodexArgs: []string{"--uninstall-hooks"}},
+		},
+		{
+			name: "legacy --headless-ensure now passes through to codex",
+			args: []string{"--headless-ensure"},
+			want: Args{CodexArgs: []string{"--headless-ensure"}},
+		},
 	}
 
 	for _, tc := range tests {
@@ -393,17 +421,11 @@ func TestParseArgs_Table(t *testing.T) {
 			if got.Headless != tc.want.Headless {
 				t.Errorf("Headless: got %v, want %v", got.Headless, tc.want.Headless)
 			}
-			if got.InstallHooksFlag != tc.want.InstallHooksFlag {
-				t.Errorf("InstallHooksFlag: got %v, want %v", got.InstallHooksFlag, tc.want.InstallHooksFlag)
-			}
-			if got.UninstallHooksFlag != tc.want.UninstallHooksFlag {
-				t.Errorf("UninstallHooksFlag: got %v, want %v", got.UninstallHooksFlag, tc.want.UninstallHooksFlag)
-			}
-			if got.HeadlessEnsureFlag != tc.want.HeadlessEnsureFlag {
-				t.Errorf("HeadlessEnsureFlag: got %v, want %v", got.HeadlessEnsureFlag, tc.want.HeadlessEnsureFlag)
-			}
 			if got.NoUpdateCheck != tc.want.NoUpdateCheck {
 				t.Errorf("NoUpdateCheck: got %v, want %v", got.NoUpdateCheck, tc.want.NoUpdateCheck)
+			}
+			if !equalStringSlice(got.CodexArgs, tc.want.CodexArgs) {
+				t.Errorf("CodexArgs: got %v, want %v", got.CodexArgs, tc.want.CodexArgs)
 			}
 		})
 	}
@@ -599,7 +621,10 @@ func TestHandleHelp_AllFlagsPresent(t *testing.T) {
 	out := captureStdout(func() {
 		handleHelp("")
 	})
-	flags := []string{"--profile", "--model", "--upstream", "--verbose", "-v", "--log-file", "--otel", "--no-otel", "--otel-logs-table", "--port", "--headless", "--headless-ensure", "--idle-timeout", "--install-hooks", "--uninstall-hooks", "--no-update-check", "--version", "--help"}
+	// Legacy hook flags (--install-hooks / --uninstall-hooks /
+	// --headless-ensure) were lifted to the `hooks` subcommand in #88; the
+	// help text now lists `hooks` instead.
+	flags := []string{"--profile", "--model", "--upstream", "--verbose", "-v", "--log-file", "--otel", "--no-otel", "--otel-logs-table", "--port", "--headless", "--idle-timeout", "--no-update-check", "--version", "--help", "hooks"}
 	for _, flag := range flags {
 		if !strings.Contains(out, flag) {
 			t.Errorf("expected help output to contain flag %q, got:\n%s", flag, out)

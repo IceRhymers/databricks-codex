@@ -43,9 +43,6 @@ var flagDefs = func() []completion.FlagDef {
 		"port",
 		"headless",
 		"idle-timeout",
-		"install-hooks",
-		"uninstall-hooks",
-		"headless-ensure",
 		"no-update-check",
 	}
 	byName := map[string]completion.FlagDef{}
@@ -68,3 +65,11 @@ var flagDefs = func() []completion.FlagDef {
 // directly from rootCommand so it can never drift from the tree — the tree
 // is the source of truth for which flags the binary recognises.
 var knownFlags = rootCommand.KnownFlags()
+
+// knownSubcommands is the recursive shell-completion subcommand tree fed
+// to pkg/completion so `databricks-codex <TAB>` offers completion / update
+// / hooks, and `databricks-codex hooks <TAB>` offers install / uninstall
+// / session-start. #88 lifts this from rootCommand alongside the dep bump
+// to databricks-claude v1.0.2 (which exports SubcommandDef); see the
+// doc-comment in internal/cmd/cmd.go for the prior #86 omission.
+var knownSubcommands = rootCommand.CompletionSubcommands()

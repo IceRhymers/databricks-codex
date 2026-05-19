@@ -21,11 +21,13 @@ import (
 // TestParseArgsCasesAreDeclaredInRootTree) fail loudly if step 1 and 2
 // drift apart — the tree is the single source of truth.
 //
-// #86 migrates only the *root* command. config / hooks / serve continue
-// to live as root flags + their existing dispatch in main.go; their
-// migration onto Subcommands is tracked in #87/#88/#89. --profile and
-// --port are already declared as Persistent so subcommand inheritance
-// works out of the box once those migrations land.
+// #86 migrated the *root* command. #88 lifts the hooks lifecycle flags
+// (--install-hooks / --uninstall-hooks / --headless-ensure) onto a
+// `hooks` subcommand; the legacy root-flag spellings are removed and any
+// invocation that used them now errors (or, if completely unrecognised,
+// is forwarded to codex). --profile and --port live on Persistent so
+// subcommand inheritance works for the new tree. config / serve are
+// still tracked under #87/#89.
 var rootCommand = cmd.Command{
 	Name:  "databricks-codex",
 	Short: "Databricks AI Gateway wrapper for OpenAI Codex CLI",
@@ -82,18 +84,16 @@ var rootCommand = cmd.Command{
 		{Name: "tls-key", Description: "TLS private key file for the local proxy (requires --tls-cert)", TakesArg: true, Completer: "__files"},
 		{Name: "headless", Description: "Start proxy without launching codex (for IDE extensions or hooks)"},
 		{Name: "idle-timeout", Description: "Idle timeout for headless mode (default: 30m; 0 disables)", TakesArg: true, Default: "30m"},
-		{Name: "install-hooks", Description: "Install SessionStart hook into ~/.codex/hooks.json"},
-		{Name: "uninstall-hooks", Description: "Remove databricks-codex hooks from ~/.codex/hooks.json"},
-		{Name: "headless-ensure", Description: "Start proxy if not running — called by the SessionStart hook"},
 		{Name: "no-update-check", Description: "Skip the automatic update check on startup", EnvVar: "DATABRICKS_NO_UPDATE_CHECK"},
 	},
 
 	// Subcommands declared on the root. completion and update dispatch
-	// from main.go directly today; config/hooks/serve children are not
-	// yet on the tree (they're still root flags — see #87/#88/#89).
+	// from main.go directly. #88 adds `hooks` (install/uninstall/
+	// session-start); config/serve are still tracked under #87/#89.
 	Subcommands: []cmd.Command{
 		completionCommand,
 		updateCommand,
+		hooksCommand,
 	},
 }
 
@@ -117,3 +117,135 @@ var updateCommand = cmd.Command{
 	Name:  "update",
 	Short: "Check for a newer release and print upgrade instructions",
 }
+
+// hooksCommand declares the `hooks` subcommand tree introduced in #88.
+// Consolidates the 3 hooks-lifecycle root flags (--install-hooks,
+// --uninstall-hooks, --headless-ensure) under a discoverable subcommand.
+// install/uninstall manage the SessionStart entries in ~/.codex/hooks.json;
+// session-start is hook-invoked refcount-managed proxy lifecycle internal
+// (formerly --headless-ensure).
+//
+// Tree shape:
+//
+//	hooks
+//	├── install        [--profile P] [--port N]
+//	├── uninstall
+//	└── session-start  [--port N]   (hook-invoked internal)
+//
+// The hook-install logic (installHooks/uninstallHooks in hooks.go) and the
+// proxy-ensure logic (headlessEnsure) are unchanged behaviorally — they
+// move behind tree commands. The detector that matches "databricks-codex
+// --headless"-prefixed entries continues to recognise hooks installed by
+// the legacy flag spellings, so a re-install replaces them cleanly with
+// the new "databricks-codex hooks session-start" command line.
+var hooksCommand = cmd.Command{
+	Name:  "hooks",
+	Short: "Session-hook deployment mode: install/uninstall + lifecycle internals",
+	Long:  hooksHelpTemplate,
+	Subcommands: []cmd.Command{
+		{
+			Name:  "install",
+			Short: "Install SessionStart hook into ~/.codex/hooks.json",
+			Long:  hooksInstallHelpTemplate,
+			Flags: []cmd.FlagDef{
+				{Name: "help", Short: "h", Description: "Show help message"},
+			},
+		},
+		{
+			Name:  "uninstall",
+			Short: "Remove databricks-codex hooks from ~/.codex/hooks.json",
+			Long:  hooksUninstallHelpTemplate,
+			Flags: []cmd.FlagDef{
+				{Name: "help", Short: "h", Description: "Show help message"},
+			},
+		},
+		{
+			Name:  "session-start",
+			Short: "Start proxy if not running (invoked by the SessionStart hook — internal)",
+			Long:  hooksSessionStartHelpTemplate,
+			Flags: []cmd.FlagDef{
+				{Name: "port", Description: "Proxy listen port (default: saved state > 49154)", TakesArg: true, StateKey: "port", Default: "49154"},
+				{Name: "help", Short: "h", Description: "Show help message"},
+			},
+		},
+	},
+}
+
+const hooksHelpTemplate = `Usage: databricks-codex hooks <subcommand> [flags]
+
+Session-hook deployment mode for the OpenAI Codex CLI. Installs hook
+entries into ~/.codex/hooks.json that spin a refcount-managed proxy up on
+SessionStart — making 'databricks-codex' auto-launch with every codex
+session without a long-lived daemon.
+
+Subcommands:
+  install        Install the SessionStart hook into ~/.codex/hooks.json
+                 (idempotent). Also flips [features] hooks = true in
+                 ~/.codex/config.toml so codex actually reads the file.
+  uninstall      Remove databricks-codex hooks from
+                 ~/.codex/hooks.json. Tolerates "not installed".
+  session-start  Hook-invoked internal: starts the proxy if it isn't
+                 already running. Called by the SessionStart hook JSON
+                 written by 'hooks install'. Not intended to be invoked
+                 directly.
+
+Run 'databricks-codex hooks <subcommand> --help' for per-subcommand flags.
+
+Examples:
+  # First-time install on a developer machine:
+  databricks-codex hooks install
+
+  # Remove hooks (e.g. when switching back to the manual proxy mode):
+  databricks-codex hooks uninstall
+
+Exit codes:
+  0   success
+  1   write/discovery failure
+  2   missing or unknown subcommand
+`
+
+const hooksInstallHelpTemplate = `Usage: databricks-codex hooks install [flags]
+
+Install the SessionStart hook into ~/.codex/hooks.json so that every
+codex session auto-launches a refcount-managed databricks-codex proxy
+in the background. Idempotent — safe to re-run after upgrades.
+
+Also ensures [features] hooks = true in ~/.codex/config.toml; without
+that flag codex does not read hooks.json at all.
+
+Generated hook JSON:
+  SessionStart → "databricks-codex hooks session-start"
+
+Flags:
+  --help, -h    Show this help message
+`
+
+const hooksUninstallHelpTemplate = `Usage: databricks-codex hooks uninstall [flags]
+
+Remove databricks-codex hook entries from ~/.codex/hooks.json. Other
+user-authored hooks survive byte-identical. Also removes the
+[features] hooks = true line databricks-codex installed; legacy
+codex_hooks = true (if present) is left untouched.
+
+If hooks.json doesn't exist, this is a no-op.
+
+Flags:
+  --help, -h    Show this help message
+`
+
+const hooksSessionStartHelpTemplate = `Usage: databricks-codex hooks session-start [flags]
+
+Hook-invoked internal: probes the local proxy on the configured port
+and, if absent, starts a detached headless databricks-codex process
+that exits via idle timeout. Replaces the legacy --headless-ensure
+flag. Not intended for direct invocation — the SessionStart hook
+JSON written by 'hooks install' calls this command.
+
+MUST remain fast and fail-fast: no interactive auth flow. If the user
+hasn't run 'databricks auth login' yet, this command exits 0 silently
+so the codex session is not blocked on a hook timeout.
+
+Flags:
+  --port int    Override saved port (default: saved state > 49154)
+  --help, -h    Show this help message
+`

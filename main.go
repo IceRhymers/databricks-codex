@@ -33,7 +33,19 @@ func main() {
 	// completion <shell> — must be the very first check, before any flag parsing,
 	// auth, or state loading. Safe to call in the Homebrew install sandbox.
 	if len(os.Args) >= 2 && os.Args[1] == "completion" {
-		completion.Run(os.Args[2:], flagDefs, "databricks-codex")
+		completion.Run(os.Args[2:], flagDefs, "databricks-codex", knownSubcommands...)
+		os.Exit(0)
+	}
+
+	// hooks <subcommand> — handled before auth/state setup since
+	// session-start is hot-path (called by every codex SessionStart) and
+	// install/uninstall must work in environments where the proxy is not
+	// yet configured. The dispatcher in hooks_cmd.go owns flag parsing.
+	if len(os.Args) >= 2 && os.Args[1] == "hooks" {
+		if err := runHooksCommand(os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, "databricks-codex:", err)
+			os.Exit(1)
+		}
 		os.Exit(0)
 	}
 
@@ -77,37 +89,6 @@ func main() {
 
 	if a.Version {
 		fmt.Printf("databricks-codex %s\n", Version)
-		os.Exit(0)
-	}
-
-	// --- Hook lifecycle commands (handled before auth/config setup) ---
-	if a.InstallHooksFlag || a.UninstallHooksFlag {
-		homeDir, err := os.UserHomeDir()
-		if err != nil {
-			log.Fatalf("databricks-codex: cannot determine home dir: %v", err)
-		}
-		hp := filepath.Join(homeDir, ".codex", "hooks.json")
-		if a.InstallHooksFlag {
-			if err := installHooks(hp); err != nil {
-				log.Fatalf("databricks-codex: --install-hooks: %v", err)
-			}
-			fmt.Fprintln(os.Stderr, "databricks-codex: hooks installed — SessionStart hook added to ~/.codex/hooks.json")
-		} else {
-			if err := uninstallHooks(hp); err != nil {
-				log.Fatalf("databricks-codex: --uninstall-hooks: %v", err)
-			}
-			fmt.Fprintln(os.Stderr, "databricks-codex: hooks removed from ~/.codex/hooks.json")
-		}
-		os.Exit(0)
-	}
-
-	// --- Headless hook command (called by installed hooks, not by end users) ---
-	if a.HeadlessEnsureFlag {
-		state := loadState()
-		port := resolvePort(a.PortFlag, state)
-		if err := headlessEnsure(port); err != nil {
-			log.Fatalf("databricks-codex: headless ensure failed: %v", err)
-		}
 		os.Exit(0)
 	}
 
@@ -465,9 +446,6 @@ type Args struct {
 	PortFlag            int
 	Headless            bool
 	IdleTimeout         time.Duration
-	InstallHooksFlag    bool
-	UninstallHooksFlag  bool
-	HeadlessEnsureFlag  bool
 	NoUpdateCheck       bool
 	CodexArgs           []string
 }
@@ -617,12 +595,6 @@ func parseArgs(args []string) (*Args, error) {
 						return nil, fmt.Errorf("--idle-timeout: %q is not a valid duration (use e.g. 30s, 5m, 1h)", raw)
 					}
 					a.IdleTimeout = d
-				case "--install-hooks":
-					a.InstallHooksFlag = true
-				case "--uninstall-hooks":
-					a.UninstallHooksFlag = true
-				case "--headless-ensure":
-					a.HeadlessEnsureFlag = true
 				case "--no-update-check":
 					a.NoUpdateCheck = true
 				default:
@@ -675,10 +647,7 @@ Databricks-Codex Flags:
   --tls-key string          Path to TLS private key file (requires --tls-cert)
   --port int                Fixed proxy port (default: 49154, saved to state)
   --headless                Start proxy without launching codex (for IDE extensions)
-  --headless-ensure         Start proxy if not running (called by SessionStart hook)
   --idle-timeout duration   Idle timeout for headless mode (default 30m, 0 disables)
-  --install-hooks           Install SessionStart hook into ~/.codex/hooks.json
-  --uninstall-hooks         Remove databricks-codex hooks from ~/.codex/hooks.json
   --no-update-check            Skip the automatic update check on startup
   --version             Print version and exit
   --help, -h            Show this help message
@@ -686,6 +655,7 @@ Databricks-Codex Flags:
 Subcommands:
   completion <shell>           Generate shell completions (bash, zsh, fish)
   update                       Check for a newer release and print upgrade instructions
+  hooks <subcommand>           Install/uninstall SessionStart hooks (install, uninstall, session-start)
 
 ────────────────────────────────────────────────────────────────────────────────
 Codex CLI Options:

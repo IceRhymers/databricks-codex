@@ -102,10 +102,10 @@ databricks-codex --upstream https://adb-123456789.azuredatabricks.net/ai-gateway
 | `--tls-key` | | TLS private key file for the local proxy (requires `--tls-cert`) |
 | `--headless` | `false` | Start proxy without launching codex (for IDE extensions or hooks) |
 | `--idle-timeout` | `30m` | Idle timeout for headless mode (`0` disables; bare number = minutes) |
-| `--install-hooks` | | Install SessionStart hook into `~/.codex/hooks.json` |
-| `--uninstall-hooks` | | Remove databricks-codex hooks from `~/.codex/hooks.json` |
 | `--version` | | Print version and exit |
 | `--help`, `-h` | | Print wrapper flags and the full `codex --help` output, then exit |
+
+Hook installation lives under `databricks-codex hooks` (see [`hooks` Subcommand](#hooks-subcommand)).
 
 All other flags and args are forwarded to `codex`.
 
@@ -161,21 +161,27 @@ This lets the wrapper:
 
 `databricks-codex --help` (or `-h`) prints the wrapper's own flags followed by the complete `codex --help` output.
 
-## Session Hooks (automatic proxy lifecycle)
+## `hooks` Subcommand
 
-Install hooks so every Codex session auto-starts the proxy on startup — no manual `--headless` needed.
+Install hooks so every Codex session auto-starts the proxy on startup — no manual `--headless` needed. Replaces the legacy root flags (`--install-hooks` / `--uninstall-hooks` / `--headless-ensure`), which were removed in v0.12.
 
 > **First-time setup:** Run `databricks-codex` at least once before installing hooks. This writes `~/.codex/config.toml` so the proxy is used for all Codex sessions.
+
+| Subcommand | Purpose |
+| --- | --- |
+| `databricks-codex hooks install` | Install SessionStart hook into `~/.codex/hooks.json` |
+| `databricks-codex hooks uninstall` | Remove databricks-codex hooks from `~/.codex/hooks.json` |
+| `databricks-codex hooks session-start` | Hook-invoked internal — start proxy if not running |
 
 ### Install
 
 ```bash
-databricks-codex --install-hooks
+databricks-codex hooks install
 ```
 
 This merges a **SessionStart** hook into `~/.codex/hooks.json` and enables the `hooks` feature flag in `~/.codex/config.toml`:
 
-- **SessionStart** (`startup`): runs `databricks-codex --headless-ensure` — starts the proxy if it isn't already running.
+- **SessionStart** (`startup`): runs `databricks-codex hooks session-start` — starts the proxy if it isn't already running.
 
 ### Shutdown
 
@@ -184,15 +190,16 @@ Unlike Claude Code, the Codex CLI does not have a `SessionEnd` hook event. The p
 ### Uninstall
 
 ```bash
-databricks-codex --uninstall-hooks
+databricks-codex hooks uninstall
 ```
 
 Removes only the databricks-codex hook entries. Other hooks in your `hooks.json` are untouched.
 
 ### Notes
 
-- Safe to rerun `--install-hooks` after upgrades — existing hooks are replaced, not duplicated.
+- Safe to rerun `hooks install` after upgrades — existing hooks are replaced, not duplicated.
 - Custom port settings persist automatically via the state file (`~/.codex/.databricks-codex.json`).
+- `hooks session-start` is wired by `hooks install` for you; running it manually is a no-op when the proxy is already up.
 
 ## Shell Tab Completions
 
