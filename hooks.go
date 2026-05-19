@@ -20,7 +20,9 @@ var hooksKeyRegexp = regexp.MustCompile(`(?m)^\s*hooks\s*=`)
 
 // headlessEnsure checks whether the proxy is healthy on the given port.
 // If not, it starts a detached headless proxy and polls until ready (max 10s).
-// Called by the SessionStart hook via: databricks-codex --headless-ensure
+// Called by the SessionStart hook via: databricks-codex hooks session-start
+// (#88 lifted this off the legacy --headless-ensure root flag; the entry
+// written by installHooks now invokes the subcommand spelling).
 //
 // The proxy shuts itself down via idle timeout — there is no corresponding
 // release hook because Codex CLI has no session-end event.
@@ -65,7 +67,7 @@ func installHooks(hooksPath string) error {
 		"hooks": []interface{}{
 			map[string]interface{}{
 				"type":    "command",
-				"command": "databricks-codex --headless-ensure",
+				"command": "databricks-codex hooks session-start",
 				"timeout": 15,
 			},
 		},
@@ -118,7 +120,7 @@ func uninstallHooks(hooksPath string) error {
 	return removeHooksFeatureFlag(configPath)
 }
 
-// removeDBXHooks removes any hook entries whose command contains "databricks-codex --headless".
+// removeDBXHooks removes any hook entries that databricks-codex installed.
 func removeDBXHooks(hooks map[string]interface{}) {
 	for event, val := range hooks {
 		arr, _ := val.([]interface{})
@@ -132,7 +134,13 @@ func removeDBXHooks(hooks map[string]interface{}) {
 	}
 }
 
-// isDBXHookEntry returns true if any nested hook command references databricks-codex --headless.
+// isDBXHookEntry returns true if any nested hook command was installed by
+// databricks-codex. Recognises both spellings so re-install / uninstall
+// stays idempotent across the #88 cutover:
+//   - "databricks-codex --headless..." — legacy entries written by the
+//     pre-#88 --install-hooks flag.
+//   - "databricks-codex hooks ..." — entries written by the new
+//     `hooks install` subcommand.
 func isDBXHookEntry(entry interface{}) bool {
 	m, ok := entry.(map[string]interface{})
 	if !ok {
@@ -141,11 +149,15 @@ func isDBXHookEntry(entry interface{}) bool {
 	inner, _ := m["hooks"].([]interface{})
 	for _, h := range inner {
 		hm, _ := h.(map[string]interface{})
-		if cmd, _ := hm["command"].(string); len(cmd) > 0 {
-			if len(cmd) >= len("databricks-codex --headless") &&
-				cmd[:len("databricks-codex --headless")] == "databricks-codex --headless" {
-				return true
-			}
+		cmd, _ := hm["command"].(string)
+		if cmd == "" {
+			continue
+		}
+		if strings.HasPrefix(cmd, "databricks-codex --headless") {
+			return true
+		}
+		if strings.HasPrefix(cmd, "databricks-codex hooks ") {
+			return true
 		}
 	}
 	return false

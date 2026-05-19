@@ -20,12 +20,13 @@
 // slice already holds --profile / --port so subcommand inheritance can be
 // wired up when those migrations land.
 //
-// Note vs. the sister databricks-claude implementation: this port omits the
-// CompletionSubcommands() method because the pinned databricks-claude
-// pkg/completion (v0.17.0) does not yet expose SubcommandDef. The cross-repo
-// dependency bump is deliberately out of scope for #86; the method will be
-// added back when the codex repo adopts a databricks-claude release that
-// carries SubcommandDef.
+// Note vs. the sister databricks-claude implementation: #86 deliberately
+// omitted CompletionSubcommands() because the pinned databricks-claude
+// pkg/completion (v0.17.0) did not yet expose SubcommandDef. #88 adopts
+// databricks-claude v1.0.2 (which exports SubcommandDef) alongside the
+// hooks subcommand migration, and re-introduces the method here so nested
+// shell completion can offer e.g. `hooks <TAB>` → install/uninstall/
+// session-start.
 package cmd
 
 import (
@@ -164,6 +165,25 @@ func (c Command) CompletionFlags() []completion.FlagDef {
 	out := make([]completion.FlagDef, len(flags))
 	for i, f := range flags {
 		out[i] = f.ToCompletion()
+	}
+	return out
+}
+
+// CompletionSubcommands returns the immediate children as
+// pkg/completion.SubcommandDef. The conversion is RECURSIVE: each child
+// carries its own Flags and Subcommands so the shell-completion generator
+// can offer nested completion (e.g. `hooks install --<TAB>` →
+// install-scoped flags). Flags include each child's Persistent ++ Flags so
+// inherited flags surface alongside the child's own.
+func (c Command) CompletionSubcommands() []completion.SubcommandDef {
+	out := make([]completion.SubcommandDef, len(c.Subcommands))
+	for i, s := range c.Subcommands {
+		out[i] = completion.SubcommandDef{
+			Name:        s.Name,
+			Description: s.Short,
+			Flags:       s.CompletionFlags(),
+			Subcommands: s.CompletionSubcommands(),
+		}
 	}
 	return out
 }
