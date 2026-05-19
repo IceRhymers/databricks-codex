@@ -21,24 +21,23 @@ import (
 // TestParseArgsCasesAreDeclaredInRootTree) fail loudly if step 1 and 2
 // drift apart — the tree is the single source of truth.
 //
-// #86 migrated the *root* command. #88 lifts the hooks lifecycle flags
-// (--install-hooks / --uninstall-hooks / --headless-ensure) onto a
-// `hooks` subcommand; the legacy root-flag spellings are removed and any
-// invocation that used them now errors (or, if completely unrecognised,
-// is forwarded to codex). --profile and --port live on Persistent so
-// subcommand inheritance works for the new tree. config / serve are
-// still tracked under #87/#89.
+// #86 migrated the root command onto the tree. #87 lifts the persistent-config
+// editor (the legacy --otel*/--print-env root flags) onto a discoverable
+// `config` subcommand; #88 lifts the hooks lifecycle flags
+// (--install-hooks / --uninstall-hooks / --headless-ensure) onto a `hooks`
+// subcommand. Both sets of legacy root-flag spellings are GONE in this
+// revision. serve is still tracked under #89. --profile and --port live on
+// Persistent so subcommand inheritance works for the migrated children.
 var rootCommand = cmd.Command{
 	Name:  "databricks-codex",
 	Short: "Databricks AI Gateway wrapper for OpenAI Codex CLI",
 
 	// Persistent flags are inherited by every subcommand once those
-	// commands migrate onto the tree (#87/#88/#89). For now, declaring
-	// them here is a no-op for the existing inline-handled root flags
-	// but ensures the tree is shaped correctly for the follow-up. Both
-	// flags also feed the resolution chain in main.go today; the
-	// StateKey/EnvVar/Default fields below document that behavior so
-	// later sub-issues can derive the chain from this declaration.
+	// commands migrate onto the tree (#89). Each migrated leaf
+	// (today: config + hooks children) re-declares --profile / --port
+	// locally where it consumes them — internal/cmd's parser does not
+	// yet walk ancestors, so this is the same shape as databricks-claude's
+	// configCommand leaves.
 	Persistent: []cmd.FlagDef{
 		{
 			Name:        "profile",
@@ -60,22 +59,14 @@ var rootCommand = cmd.Command{
 	},
 
 	// Order matches the legacy flagDefs slice so the bash/zsh/fish
-	// completion output stays byte-identical with the pre-tree binary.
-	// The two flags ("profile" and "port") that previously appeared in
-	// the flagDefs slice now live under Persistent (which renders first
-	// in AllFlags), so completion ordering needs to mirror that — see
-	// completion_flags.go where flagDefs is rebuilt from rootCommand.
+	// completion output stays byte-identical with the pre-tree binary
+	// for the flags that survived #87/#88. The migrated OTEL/--print-env
+	// and hooks-lifecycle flags are gone from BOTH this slice and
+	// completion_flags.go's `order` — that is the breaking surface change.
 	Flags: []cmd.FlagDef{
 		{Name: "verbose", Short: "v", Description: "Enable debug logging to stderr"},
 		{Name: "version", Description: "Print version and exit"},
 		{Name: "help", Short: "h", Description: "Show help message"},
-		{Name: "print-env", Description: "Print resolved configuration (token redacted) and exit"},
-		{Name: "otel", Description: "Enable OpenTelemetry export (metrics + logs)"},
-		{Name: "no-otel", Description: "Disable OpenTelemetry for this session (saved tables preserved)"},
-		{Name: "no-otel-metrics", Description: "Disable metrics for this session (saved table preserved)"},
-		{Name: "no-otel-logs", Description: "Disable logs for this session (saved table preserved)"},
-		{Name: "otel-metrics-table", Description: "Unity Catalog table for OTel metrics (cat.schema.table)", TakesArg: true, StateKey: "otel_metrics_table"},
-		{Name: "otel-logs-table", Description: "Unity Catalog table for OTel logs (cat.schema.table)", TakesArg: true, StateKey: "otel_logs_table"},
 		{Name: "model", Description: "Model to use (default: databricks-claude-sonnet-4-5)", TakesArg: true, StateKey: "model"},
 		{Name: "upstream", Description: "Override upstream codex binary path", TakesArg: true, Completer: "__files"},
 		{Name: "log-file", Description: "Write debug logs to file (combinable with --verbose)", TakesArg: true, Completer: "__files"},
@@ -88,11 +79,14 @@ var rootCommand = cmd.Command{
 	},
 
 	// Subcommands declared on the root. completion and update dispatch
-	// from main.go directly. #88 adds `hooks` (install/uninstall/
-	// session-start); config/serve are still tracked under #87/#89.
+	// from main.go directly. config (added in #87) carries its own
+	// dispatcher in cli_config.go. hooks (added in #88) carries its own
+	// dispatcher in cli_hooks.go. serve remains as root flags for now —
+	// see #89.
 	Subcommands: []cmd.Command{
 		completionCommand,
 		updateCommand,
+		configCommand,
 		hooksCommand,
 	},
 }
@@ -116,6 +110,74 @@ var completionCommand = cmd.Command{
 var updateCommand = cmd.Command{
 	Name:  "update",
 	Short: "Check for a newer release and print upgrade instructions",
+}
+
+// configCommand declares the `config` subcommand tree introduced in #87.
+// Consolidates the persistent-config root flags (--otel, --no-otel,
+// --no-otel-metrics, --no-otel-logs, --otel-metrics-table,
+// --otel-logs-table, --print-env) into a discoverable tree. Storage
+// semantics — state-file table preferences preserved across `config otel
+// disable`, ~/.codex/config.toml [otel] section *removal* (not just
+// skip-the-write) when both signals are off — are unchanged; this is a
+// pure surface reshape.
+//
+// Tree shape:
+//
+//	config
+//	├── otel
+//	│   ├── enable     [--metrics-table T] [--logs-table T]
+//	│   └── disable    [--metrics] [--logs]      (no flags = both signals)
+//	└── show           (was --print-env)
+//
+// Codex's surface is smaller than databricks-claude's: no `config write`
+// (codex has no settings.json env block — config.toml is patched at
+// session start by the proxy lifecycle, not by a one-shot bootstrap), no
+// `config websearch` (codex has no local websearch fulfilment), no
+// traces signal (codex's tomlconfig manages logs + metrics exporters
+// only).
+var configCommand = cmd.Command{
+	Name:  "config",
+	Short: "Persistent config editor (otel, show)",
+	Long:  configHelpTemplate,
+	Subcommands: []cmd.Command{
+		{
+			Name:  "otel",
+			Short: "Toggle OpenTelemetry signals (enable|disable)",
+			Long:  configOtelHelpTemplate,
+			Subcommands: []cmd.Command{
+				{
+					Name:  "enable",
+					Short: "Enable OTEL — persists table preferences to state for the next codex session",
+					Long:  configOtelEnableHelpTemplate,
+					Flags: []cmd.FlagDef{
+						{Name: "metrics-table", Description: "Unity Catalog table for OTEL metrics (cat.schema.table)", TakesArg: true, StateKey: "otel_metrics_table"},
+						{Name: "logs-table", Description: "Unity Catalog table for OTEL logs (cat.schema.table)", TakesArg: true, StateKey: "otel_logs_table"},
+						{Name: "profile", Description: "Databricks CLI profile (default: state file > DEFAULT)", TakesArg: true, Completer: "__databricks_profiles", StateKey: "profile", MDMKey: "databricksProfile", Default: "DEFAULT"},
+						{Name: "help", Short: "h", Description: "Show help message"},
+					},
+				},
+				{
+					Name:  "disable",
+					Short: "Disable OTEL — clears the [otel] section from ~/.codex/config.toml on the next session start (state file preserved)",
+					Long:  configOtelDisableHelpTemplate,
+					Flags: []cmd.FlagDef{
+						{Name: "metrics", Description: "Disable only OTEL metrics (other signals untouched)"},
+						{Name: "logs", Description: "Disable only OTEL logs"},
+						{Name: "help", Short: "h", Description: "Show help message"},
+					},
+				},
+			},
+		},
+		{
+			Name:  "show",
+			Short: "Print resolved configuration (was --print-env)",
+			Long:  configShowHelpTemplate,
+			Flags: []cmd.FlagDef{
+				{Name: "profile", Description: "Databricks CLI profile (default: state file > DEFAULT)", TakesArg: true, Completer: "__databricks_profiles", StateKey: "profile", MDMKey: "databricksProfile", Default: "DEFAULT"},
+				{Name: "help", Short: "h", Description: "Show help message"},
+			},
+		},
+	},
 }
 
 // hooksCommand declares the `hooks` subcommand tree introduced in #88.
@@ -170,6 +232,130 @@ var hooksCommand = cmd.Command{
 		},
 	},
 }
+
+const configHelpTemplate = `Usage: databricks-codex config <subcommand> [flags]
+
+Persistent config editor. Mutates ~/.codex/.databricks-codex.json (state file)
+to record table preferences that the proxy lifecycle reads at the next codex
+session start. ~/.codex/config.toml is NOT touched by config.* commands —
+config.toml is owned by the proxy lifecycle and is rewritten when codex
+launches.
+
+Subcommands:
+  otel enable [flags]   Persist OTEL table preferences and (next session)
+                        emit the [otel] section in config.toml.
+  otel disable [flags]  Mark OTEL signals as off for the next session. The
+                        proxy lifecycle removes the [otel] section from
+                        config.toml on its next start. State-file table
+                        preferences are PRESERVED so a future
+                        'config otel enable' restores them.
+  show [flags]          Print the resolved configuration (token redacted).
+                        Read-only — no writes.
+
+Run 'databricks-codex config <subcommand> --help' for per-subcommand flags.
+
+Examples:
+  # Enable OTEL with explicit metrics + logs tables:
+  databricks-codex config otel enable \
+    --metrics-table main.codex_telemetry.codex_otel_metrics \
+    --logs-table   main.codex_telemetry.codex_otel_logs
+
+  # Disable just metrics (logs still routed if previously enabled):
+  databricks-codex config otel disable --metrics
+
+  # Disable all signals:
+  databricks-codex config otel disable
+
+  # Diagnostic dump:
+  databricks-codex config show
+
+Exit codes:
+  0   success
+  1   write/discovery failure
+  2   missing or unknown subcommand
+`
+
+const configOtelHelpTemplate = `Usage: databricks-codex config otel <enable|disable> [flags]
+
+Toggle OpenTelemetry signal export for the wrapped codex session. Storage:
+  - Tables (metrics/logs) are persisted to ~/.codex/.databricks-codex.json
+  - The [otel] section in ~/.codex/config.toml is written or removed by the
+    proxy lifecycle the next time codex starts (this command does not edit
+    config.toml directly).
+
+'config otel disable' marks signals off in the state file but PRESERVES the
+table-name preferences so a subsequent 'config otel enable' can restore them
+without re-typing.
+
+Subcommands:
+  enable    Persist OTEL table preferences (see 'config otel enable --help').
+  disable   Mark OTEL signals off for the next session (see 'config otel disable --help').
+`
+
+const configOtelEnableHelpTemplate = `Usage: databricks-codex config otel enable [flags]
+
+Enable OTEL — persists the resolved table names to ~/.codex/.databricks-codex.json
+so the proxy lifecycle emits the [otel] section in ~/.codex/config.toml the
+next time codex launches.
+
+Resolution chain per signal: explicit flag > state file > derive (logs from
+metrics) > unset. With no table flags and an empty state file, --metrics-table
+defaults to 'main.codex_telemetry.codex_otel_metrics' (matching the legacy
+'--otel' bare-toggle behavior).
+
+Flags:
+  --metrics-table string   Unity Catalog table for OTEL metrics (cat.schema.table)
+  --logs-table string      Unity Catalog table for OTEL logs   (cat.schema.table)
+  --profile string         Databricks CLI profile (default: state > DEFAULT)
+  --help, -h               Show this help message
+
+Examples:
+  # Enable with custom metrics + logs tables:
+  databricks-codex config otel enable \
+    --metrics-table main.telemetry.codex_otel_metrics \
+    --logs-table   main.telemetry.codex_otel_logs
+
+  # Enable with default tables (logs derived from metrics):
+  databricks-codex config otel enable
+`
+
+const configOtelDisableHelpTemplate = `Usage: databricks-codex config otel disable [flags]
+
+Mark OTEL signals off in the state file. The proxy lifecycle clears the
+[otel] section from ~/.codex/config.toml on its next start. State-file table
+preferences are PRESERVED — a subsequent 'config otel enable' restores them.
+With no flags, BOTH signals are disabled (equivalent to the legacy --no-otel).
+
+Flags:
+  --metrics    Disable only OTEL metrics (logs untouched)
+  --logs       Disable only OTEL logs
+  --help, -h   Show this help message
+
+Examples:
+  # Disable both signals:
+  databricks-codex config otel disable
+
+  # Disable just metrics:
+  databricks-codex config otel disable --metrics
+
+  # Disable just logs:
+  databricks-codex config otel disable --logs
+`
+
+const configShowHelpTemplate = `Usage: databricks-codex config show [flags]
+
+Print the resolved configuration (token redacted) and exit. Read-only —
+zero writes to the state file or config.toml. Replaces the legacy
+--print-env flag.
+
+Resolves: profile, model, Databricks workspace host, AI Gateway URL,
+auth token (redacted), the persisted OTEL UC tables, and the discovered
+codex binary path.
+
+Flags:
+  --profile string   Databricks CLI profile (default: state > DEFAULT)
+  --help, -h         Show this help message
+`
 
 const hooksHelpTemplate = `Usage: databricks-codex hooks <subcommand> [flags]
 

@@ -86,13 +86,6 @@ databricks-codex --upstream https://adb-123456789.azuredatabricks.net/ai-gateway
 |------|---------|-------------|
 | `--verbose`, `-v` | `false` | Enable debug logging to stderr |
 | `--log-file` | | Write debug logs to a file (combinable with `--verbose`) |
-| `--print-env` | | Print resolved configuration (token redacted) and exit |
-| `--otel` | `false` | Enable OpenTelemetry export (metrics + logs) |
-| `--no-otel` | | Disable OpenTelemetry for this session (saved tables preserved) |
-| `--otel-metrics-table` | `main.codex_telemetry.codex_otel_metrics` (when `--otel` is set) | Unity Catalog table for OpenTelemetry metrics |
-| `--otel-logs-table` | derived from metrics table when omitted | Unity Catalog table for OpenTelemetry logs |
-| `--no-otel-metrics` | | Disable metrics for this session (saved table preserved) |
-| `--no-otel-logs` | | Disable logs for this session (saved table preserved) |
 | `--profile` | saved/`DEFAULT` | Databricks CLI profile (saved to state file; `--profile` flag writes it once) |
 | `--model` | `databricks-gpt-5-5` | Model to use (saved for future sessions) |
 | `--port` | `49154` | Proxy listen port (saved for future sessions) |
@@ -109,6 +102,43 @@ Hook installation lives under `databricks-codex hooks` (see [`hooks` Subcommand]
 
 All other flags and args are forwarded to `codex`.
 
+> **Breaking in v0.12.0:** the persistent-config root flags `--otel`,
+> `--no-otel`, `--no-otel-metrics`, `--no-otel-logs`, `--otel-metrics-table`,
+> `--otel-logs-table`, and `--print-env` are gone. They moved under
+> `databricks-codex config` — see the [config Subcommand](#config-subcommand)
+> section below.
+
+## config Subcommand
+
+`databricks-codex config <subcommand>` is the persistent-config editor.
+Mutations are written to `~/.codex/.databricks-codex.json` (the state file)
+so they take effect on the **next** `databricks-codex` invocation; the
+session you're currently in is unaffected. `~/.codex/config.toml` is not
+touched by `config.*` commands — it is owned by the proxy lifecycle and
+re-emitted at every session start based on the state file.
+
+| Command | Replaces | Description |
+|---------|----------|-------------|
+| `config otel enable [--metrics-table T] [--logs-table T] [--profile P]` | `--otel`, `--otel-metrics-table`, `--otel-logs-table` | Persist OTEL table preferences. Logs table derives from metrics table when only `--metrics-table` is given. With no flags and no saved state, applies the legacy default `main.codex_telemetry.codex_otel_metrics`. |
+| `config otel disable [--metrics] [--logs]` | `--no-otel`, `--no-otel-metrics`, `--no-otel-logs` | Mark OTEL signals off in state. With no flags, both signals disabled (legacy `--no-otel` semantics). Table-name preferences are **preserved** — a future `config otel enable` restores them without re-typing. |
+| `config show` | `--print-env` | Print the resolved configuration (token redacted) and exit. Read-only. |
+
+```bash
+# Enable with custom metrics + logs tables — table names persist to state:
+databricks-codex config otel enable \
+  --metrics-table main.codex_telemetry.codex_otel_metrics \
+  --logs-table   main.codex_telemetry.codex_otel_logs
+
+# Disable just metrics; logs keep exporting on the next session:
+databricks-codex config otel disable --metrics
+
+# Disable both signals (legacy --no-otel) — table names remain in state:
+databricks-codex config otel disable
+
+# Re-enable later — saved tables resurface, no re-typing:
+databricks-codex config otel enable
+```
+
 ## Auto-Discovery
 
 On startup, `databricks-codex` auto-discovers:
@@ -120,10 +150,10 @@ On startup, `databricks-codex` auto-discovers:
 
 ### Verify your resolved configuration
 
-Run `--print-env` to print the resolved profile, Databricks host, upstream base URL, redacted token placeholder, OpenTelemetry metrics and logs tables, and detected Codex binary path, then exit without launching Codex.
+Run `config show` to print the resolved profile, Databricks host, upstream base URL, redacted token placeholder, OpenTelemetry metrics and logs tables, and detected Codex binary path, then exit without launching Codex.
 
 ```bash
-databricks-codex --print-env
+databricks-codex config show
 ```
 
 Example output:

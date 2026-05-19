@@ -43,7 +43,7 @@ func TestParseArgs_HelpLong(t *testing.T) {
 	if !a.ShowHelp {
 		t.Error("expected ShowHelp=true for --help")
 	}
-	if a.Verbose || a.Version || a.PrintEnv || a.NoOtel || a.Otel || a.Upstream != "" || a.LogFile != "" || a.Profile != "" || len(a.CodexArgs) != 0 {
+	if a.Verbose || a.Version || a.Upstream != "" || a.LogFile != "" || a.Profile != "" || len(a.CodexArgs) != 0 {
 		t.Error("unexpected non-default values alongside --help")
 	}
 }
@@ -52,13 +52,6 @@ func TestParseArgs_HelpShort(t *testing.T) {
 	a := mustParseArgs(t, []string{"-h"})
 	if !a.ShowHelp {
 		t.Error("expected ShowHelp=true for -h")
-	}
-}
-
-func TestParseArgs_PrintEnv(t *testing.T) {
-	a := mustParseArgs(t, []string{"--print-env"})
-	if !a.PrintEnv {
-		t.Error("expected PrintEnv=true for --print-env")
 	}
 }
 
@@ -111,73 +104,9 @@ func TestParseArgs_UpstreamEquals(t *testing.T) {
 	}
 }
 
-func TestParseArgs_NoOtel(t *testing.T) {
-	a := mustParseArgs(t, []string{"--no-otel"})
-	if !a.NoOtel {
-		t.Error("expected NoOtel=true for --no-otel")
-	}
-	if len(a.CodexArgs) != 0 {
-		t.Errorf("expected no CodexArgs, got %v", a.CodexArgs)
-	}
-}
-
-func TestParseArgs_OtelLogsTable(t *testing.T) {
-	a := mustParseArgs(t, []string{"--otel-logs-table", "main.custom.logs"})
-	if !a.OtelLogsTableSet {
-		t.Error("expected OtelLogsTableSet=true when --otel-logs-table is passed")
-	}
-	if a.OtelLogsTable != "main.custom.logs" {
-		t.Errorf("expected OtelLogsTable=%q, got %q", "main.custom.logs", a.OtelLogsTable)
-	}
-}
-
-func TestParseArgs_OtelLogsTableDefault(t *testing.T) {
-	a := mustParseArgs(t, []string{})
-	if a.OtelLogsTableSet {
-		t.Error("expected OtelLogsTableSet=false when --otel-logs-table is not passed")
-	}
-	_ = a.OtelLogsTable
-}
-
-func TestParseArgs_OtelMetricsTable(t *testing.T) {
-	a := mustParseArgs(t, []string{"--otel-metrics-table", "main.custom.metrics"})
-	if !a.OtelMetricsTableSet {
-		t.Error("expected OtelMetricsTableSet=true when --otel-metrics-table is passed")
-	}
-	if a.OtelMetricsTable != "main.custom.metrics" {
-		t.Errorf("expected OtelMetricsTable=%q, got %q", "main.custom.metrics", a.OtelMetricsTable)
-	}
-}
-
-func TestParseArgs_OtelMetricsTableEquals(t *testing.T) {
-	a := mustParseArgs(t, []string{"--otel-metrics-table=cat.schema.tbl"})
-	if !a.OtelMetricsTableSet {
-		t.Error("expected OtelMetricsTableSet=true for --otel-metrics-table=value form")
-	}
-	if a.OtelMetricsTable != "cat.schema.tbl" {
-		t.Errorf("expected OtelMetricsTable=%q, got %q", "cat.schema.tbl", a.OtelMetricsTable)
-	}
-}
-
-func TestParseArgs_NoOtelMetrics(t *testing.T) {
-	a := mustParseArgs(t, []string{"--no-otel-metrics"})
-	if !a.NoOtelMetrics {
-		t.Error("expected NoOtelMetrics=true for --no-otel-metrics")
-	}
-	if a.NoOtelLogs || a.NoOtel {
-		t.Error("--no-otel-metrics should not set NoOtelLogs or NoOtel")
-	}
-}
-
-func TestParseArgs_NoOtelLogs(t *testing.T) {
-	a := mustParseArgs(t, []string{"--no-otel-logs"})
-	if !a.NoOtelLogs {
-		t.Error("expected NoOtelLogs=true for --no-otel-logs")
-	}
-	if a.NoOtelMetrics || a.NoOtel {
-		t.Error("--no-otel-logs should not set NoOtelMetrics or NoOtel")
-	}
-}
+// #87 removed --no-otel*/--otel-*-table; coverage moved to TestResolveConfigOTEL_*
+// (state-driven resolver) and TestRootTreeFlagsAreParseRecognised (shrink-side
+// of the bidirectional parity check).
 
 func TestParseArgs_UnknownFlagPassthrough(t *testing.T) {
 	a := mustParseArgs(t, []string{"--unknown"})
@@ -188,7 +117,7 @@ func TestParseArgs_UnknownFlagPassthrough(t *testing.T) {
 
 func TestParseArgs_EmptyArgs(t *testing.T) {
 	a := mustParseArgs(t, []string{})
-	if a.Verbose || a.Version || a.ShowHelp || a.PrintEnv || a.NoOtel || a.Otel {
+	if a.Verbose || a.Version || a.ShowHelp {
 		t.Error("expected all bool flags false for empty args")
 	}
 	if a.Upstream != "" {
@@ -340,19 +269,15 @@ func TestParseArgs_Table(t *testing.T) {
 	}{
 		{name: "--help sets showHelp", args: []string{"--help"}, want: Args{ShowHelp: true}},
 		{name: "-h sets showHelp", args: []string{"-h"}, want: Args{ShowHelp: true}},
-		{name: "--print-env sets printEnv", args: []string{"--print-env"}, want: Args{PrintEnv: true}},
 		{name: "--version sets version", args: []string{"--version"}, want: Args{Version: true}},
 		{name: "--verbose sets verbose", args: []string{"--verbose"}, want: Args{Verbose: true}},
 		{name: "-v sets verbose", args: []string{"-v"}, want: Args{Verbose: true}},
 		{name: "--log-file sets logFile", args: []string{"--log-file", "/tmp/test.log"}, want: Args{LogFile: "/tmp/test.log"}},
 		{name: "--log-file=value", args: []string{"--log-file=/tmp/test.log"}, want: Args{LogFile: "/tmp/test.log"}},
 		{name: "--upstream sets upstream", args: []string{"--upstream", "https://gw.example.com"}, want: Args{Upstream: "https://gw.example.com"}},
-		{name: "--no-otel sets noOtel", args: []string{"--no-otel"}, want: Args{NoOtel: true}},
 		{name: "empty args all defaults", args: []string{}, want: Args{}},
 		{name: "--profile", args: []string{"--profile", "aidev"}, want: Args{Profile: "aidev"}},
 		{name: "--profile=value", args: []string{"--profile=aidev"}, want: Args{Profile: "aidev"}},
-		{name: "--otel", args: []string{"--otel"}, want: Args{Otel: true}},
-		{name: "--otel and --no-otel", args: []string{"--otel", "--no-otel"}, want: Args{Otel: true, NoOtel: true}},
 		{name: "--model", args: []string{"--model", "my-model"}, want: Args{Model: "my-model", ModelSet: true}},
 		{name: "--port", args: []string{"--port", "9999"}, want: Args{PortFlag: 9999}},
 		{name: "--headless", args: []string{"--headless"}, want: Args{Headless: true}},
@@ -391,12 +316,6 @@ func TestParseArgs_Table(t *testing.T) {
 			if got.ShowHelp != tc.want.ShowHelp {
 				t.Errorf("ShowHelp: got %v, want %v", got.ShowHelp, tc.want.ShowHelp)
 			}
-			if got.PrintEnv != tc.want.PrintEnv {
-				t.Errorf("PrintEnv: got %v, want %v", got.PrintEnv, tc.want.PrintEnv)
-			}
-			if got.NoOtel != tc.want.NoOtel {
-				t.Errorf("NoOtel: got %v, want %v", got.NoOtel, tc.want.NoOtel)
-			}
 			if got.Upstream != tc.want.Upstream {
 				t.Errorf("Upstream: got %q, want %q", got.Upstream, tc.want.Upstream)
 			}
@@ -405,9 +324,6 @@ func TestParseArgs_Table(t *testing.T) {
 			}
 			if got.Profile != tc.want.Profile {
 				t.Errorf("Profile: got %q, want %q", got.Profile, tc.want.Profile)
-			}
-			if got.Otel != tc.want.Otel {
-				t.Errorf("Otel: got %v, want %v", got.Otel, tc.want.Otel)
 			}
 			if got.Model != tc.want.Model {
 				t.Errorf("Model: got %q, want %q", got.Model, tc.want.Model)
@@ -554,12 +470,12 @@ func TestHandleHelp_ContainsDatabricksCodex(t *testing.T) {
 	}
 }
 
-func TestHandleHelp_ContainsPrintEnvFlag(t *testing.T) {
+func TestHandleHelp_ContainsConfigSubcommand(t *testing.T) {
 	out := captureStdout(func() {
 		handleHelp("")
 	})
-	if !strings.Contains(out, "--print-env") {
-		t.Errorf("expected help output to contain '--print-env', got:\n%s", out)
+	if !strings.Contains(out, "config") {
+		t.Errorf("expected help output to advertise the config subcommand, got:\n%s", out)
 	}
 }
 
@@ -610,24 +526,30 @@ func TestParseArgs_NoUpdateCheck(t *testing.T) {
 	}
 }
 
-func TestParseArgs_Otel(t *testing.T) {
-	a := mustParseArgs(t, []string{"--otel"})
-	if !a.Otel {
-		t.Error("expected Otel=true for --otel")
-	}
-}
-
 func TestHandleHelp_AllFlagsPresent(t *testing.T) {
 	out := captureStdout(func() {
 		handleHelp("")
 	})
 	// Legacy hook flags (--install-hooks / --uninstall-hooks /
 	// --headless-ensure) were lifted to the `hooks` subcommand in #88; the
-	// help text now lists `hooks` instead.
-	flags := []string{"--profile", "--model", "--upstream", "--verbose", "-v", "--log-file", "--otel", "--no-otel", "--otel-logs-table", "--port", "--headless", "--idle-timeout", "--no-update-check", "--version", "--help", "hooks"}
+	// OTEL/--print-env flags moved to `config otel`/`config show` in #87.
+	// The help text now lists `config` and `hooks` instead.
+	flags := []string{"--profile", "--model", "--upstream", "--verbose", "-v", "--log-file", "--port", "--headless", "--idle-timeout", "--no-update-check", "--version", "--help", "config", "hooks"}
 	for _, flag := range flags {
 		if !strings.Contains(out, flag) {
 			t.Errorf("expected help output to contain flag %q, got:\n%s", flag, out)
+		}
+	}
+}
+
+func TestHandleHelp_LegacyOtelFlagsAbsent(t *testing.T) {
+	// Locks the breaking surface: #87 removed these from the root.
+	out := captureStdout(func() {
+		handleHelp("")
+	})
+	for _, flag := range []string{"--otel", "--no-otel", "--no-otel-metrics", "--no-otel-logs", "--otel-metrics-table", "--otel-logs-table", "--print-env"} {
+		if strings.Contains(out, flag) {
+			t.Errorf("root help still mentions %q after #87 migration; users will discover the dead flag", flag)
 		}
 	}
 }
@@ -641,61 +563,11 @@ func TestHandleHelp_ContainsVersion(t *testing.T) {
 	}
 }
 
-// --- resolveOtelLogsTable / resolveOtelMetricsTable / deriveLogsTable tests ---
-
-func TestResolveOtelLogsTable(t *testing.T) {
-	tests := []struct {
-		name         string
-		flagValue    string
-		flagSet      bool
-		savedValue   string
-		metricsTable string
-		otel         bool
-		want         string
-	}{
-		{name: "otel disabled returns empty", otel: false, savedValue: "saved.table", want: ""},
-		{name: "flag set with value wins", flagValue: "custom.db.table", flagSet: true, otel: true, want: "custom.db.table"},
-		{name: "flag set wins over saved", flagValue: "flag.table", flagSet: true, savedValue: "saved.table", otel: true, want: "flag.table"},
-		{name: "saved value used when flag not set", flagSet: false, savedValue: "saved.table", otel: true, want: "saved.table"},
-		{name: "derives from metrics when no flag and no saved", flagSet: false, metricsTable: "main.tel.codex_otel_metrics", otel: true, want: "main.tel.codex_otel_logs"},
-		{name: "default when no flag, saved, or metrics", flagSet: false, otel: true, want: "main.codex_telemetry.codex_otel_logs"},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			got := resolveOtelLogsTable(tc.flagValue, tc.flagSet, tc.savedValue, tc.metricsTable, tc.otel)
-			if got != tc.want {
-				t.Errorf("resolveOtelLogsTable(%q, %v, %q, %q, %v) = %q, want %q",
-					tc.flagValue, tc.flagSet, tc.savedValue, tc.metricsTable, tc.otel, got, tc.want)
-			}
-		})
-	}
-}
-
-func TestResolveOtelMetricsTable(t *testing.T) {
-	tests := []struct {
-		name       string
-		flagValue  string
-		flagSet    bool
-		savedValue string
-		otel       bool
-		want       string
-	}{
-		{name: "otel disabled returns empty", otel: false, savedValue: "saved.metrics", want: ""},
-		{name: "flag set wins", flagValue: "flag.metrics", flagSet: true, savedValue: "saved.metrics", otel: true, want: "flag.metrics"},
-		{name: "saved used when flag not set", flagSet: false, savedValue: "saved.metrics", otel: true, want: "saved.metrics"},
-		{name: "default when nothing set", flagSet: false, otel: true, want: "main.codex_telemetry.codex_otel_metrics"},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			got := resolveOtelMetricsTable(tc.flagValue, tc.flagSet, tc.savedValue, tc.otel)
-			if got != tc.want {
-				t.Errorf("resolveOtelMetricsTable(%q, %v, %q, %v) = %q, want %q",
-					tc.flagValue, tc.flagSet, tc.savedValue, tc.otel, got, tc.want)
-			}
-		})
-	}
-}
+// --- deriveLogsTable test ---
+//
+// resolveOtelLogsTable / resolveOtelMetricsTable were inlined into the
+// `config otel enable` resolver in #87; their unit tests folded into
+// TestResolveConfigOTEL_OrchestrationMatrix in cli_config_test.go.
 
 func TestDeriveLogsTable(t *testing.T) {
 	tests := []struct {
@@ -718,12 +590,13 @@ func TestDeriveLogsTable(t *testing.T) {
 	}
 }
 
-// --- resolveOtel integration tests ---
+// --- resolveOtel integration tests (state-only signature, post-#87) ---
 //
-// resolveOtel is the orchestration that ties flag parsing + saved state into
-// the final (otel, metricsTable, logsTable) tuple that drives config.toml
-// patching. These tests exercise the full matrix of flag combinations
-// against a populated state file, mirroring databricks-claude's behavior.
+// #87 turned resolveOtel into a pure read-only consumer of saved state.
+// The session-time flag combinations that drove the legacy resolveOtel
+// matrix moved to TestResolveConfigOTEL_OrchestrationMatrix
+// (cli_config_test.go) — that's the writer side. resolveOtel is the
+// reader side and is much smaller now.
 
 func TestResolveOtel(t *testing.T) {
 	const customMetrics = "cat.schema.codex_otel_metrics"
@@ -731,110 +604,59 @@ func TestResolveOtel(t *testing.T) {
 
 	tests := []struct {
 		name        string
-		args        *Args
 		saved       persistentState
 		wantOtel    bool
 		wantMetrics string
 		wantLogs    string
 	}{
 		{
-			name:     "no flags, empty state: otel off, both tables empty",
-			args:     &Args{},
+			name:     "empty state: otel off, both tables empty",
 			saved:    persistentState{},
 			wantOtel: false, wantMetrics: "", wantLogs: "",
 		},
 		{
-			name:        "no flags but saved tables: implicit-enable, both tables flow through",
-			args:        &Args{},
+			name:        "saved tables, no disables: otel on, both tables flow through",
 			saved:       persistentState{OtelMetricsTable: customMetrics, OtelLogsTable: customLogs},
 			wantOtel:    true,
 			wantMetrics: customMetrics,
 			wantLogs:    customLogs,
 		},
 		{
-			name:        "--otel with empty state uses both defaults",
-			args:        &Args{Otel: true},
-			saved:       persistentState{},
-			wantOtel:    true,
-			wantMetrics: "main.codex_telemetry.codex_otel_metrics",
-			wantLogs:    "main.codex_telemetry.codex_otel_logs",
-		},
-		{
-			name:     "--no-otel with saved tables: hard off, both tables empty",
-			args:     &Args{NoOtel: true},
-			saved:    persistentState{OtelMetricsTable: customMetrics, OtelLogsTable: customLogs},
+			name:     "saved tables but both Disabled bits set: hard off (the post-`config otel disable` shape)",
+			saved:    persistentState{OtelMetricsTable: customMetrics, OtelLogsTable: customLogs, OtelMetricsDisabled: true, OtelLogsDisabled: true},
 			wantOtel: false, wantMetrics: "", wantLogs: "",
 		},
 		{
-			name:        "--no-otel-metrics with saved tables: metrics off, LOGS PRESERVED (the bug we fixed)",
-			args:        &Args{NoOtelMetrics: true},
-			saved:       persistentState{OtelMetricsTable: customMetrics, OtelLogsTable: customLogs},
-			wantOtel:    true, // implicit-enable from saved state
+			name:        "saved tables with metrics disabled only: logs preserved (the per-signal disable shape)",
+			saved:       persistentState{OtelMetricsTable: customMetrics, OtelLogsTable: customLogs, OtelMetricsDisabled: true},
+			wantOtel:    true,
 			wantMetrics: "",
 			wantLogs:    customLogs,
 		},
 		{
-			name:        "--no-otel-logs with saved tables: logs off, METRICS PRESERVED",
-			args:        &Args{NoOtelLogs: true},
-			saved:       persistentState{OtelMetricsTable: customMetrics, OtelLogsTable: customLogs},
-			wantOtel:    true, // implicit-enable from saved state
-			wantMetrics: customMetrics,
-			wantLogs:    "",
-		},
-		{
-			name:        "--otel --no-otel-metrics: explicit on + metrics-off, logs default applies",
-			args:        &Args{Otel: true, NoOtelMetrics: true},
-			saved:       persistentState{},
-			wantOtel:    true,
-			wantMetrics: "",
-			wantLogs:    "main.codex_telemetry.codex_otel_logs",
-		},
-		{
-			name:        "--otel --no-otel-logs: explicit on + logs-off, metrics default applies",
-			args:        &Args{Otel: true, NoOtelLogs: true},
-			saved:       persistentState{},
-			wantOtel:    true,
-			wantMetrics: "main.codex_telemetry.codex_otel_metrics",
-			wantLogs:    "",
-		},
-		{
-			name: "explicit --otel-metrics-table flag implicit-enables otel even without --otel",
-			args: &Args{
-				OtelMetricsTable:    customMetrics,
-				OtelMetricsTableSet: true,
-			},
-			saved:       persistentState{},
+			name:        "saved tables with logs disabled only: metrics preserved",
+			saved:       persistentState{OtelMetricsTable: customMetrics, OtelLogsTable: customLogs, OtelLogsDisabled: true},
 			wantOtel:    true,
 			wantMetrics: customMetrics,
-			wantLogs:    "cat.schema.codex_otel_logs", // derived
-		},
-		{
-			name:     "--no-otel beats everything else (even an explicit metrics flag)",
-			args:     &Args{NoOtel: true, OtelMetricsTable: customMetrics, OtelMetricsTableSet: true},
-			saved:    persistentState{},
-			wantOtel: false, wantMetrics: "", wantLogs: "",
-		},
-		{
-			name:        "--no-otel-metrics + --no-otel-logs with saved tables: both off, but otel stays implicit-on",
-			args:        &Args{NoOtelMetrics: true, NoOtelLogs: true},
-			saved:       persistentState{OtelMetricsTable: customMetrics, OtelLogsTable: customLogs},
-			wantOtel:    true,
-			wantMetrics: "",
 			wantLogs:    "",
 		},
 		{
-			name:        "saved metrics only: implicit-enable, logs derived from metrics",
-			args:        &Args{},
+			name:        "saved metrics only: otel on, logs empty",
 			saved:       persistentState{OtelMetricsTable: customMetrics},
 			wantOtel:    true,
 			wantMetrics: customMetrics,
-			wantLogs:    "cat.schema.codex_otel_logs",
+			wantLogs:    "",
+		},
+		{
+			name:     "Disabled bits set on empty tables: still off (no-op)",
+			saved:    persistentState{OtelMetricsDisabled: true, OtelLogsDisabled: true},
+			wantOtel: false, wantMetrics: "", wantLogs: "",
 		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			otel, metrics, logs := resolveOtel(tc.args, tc.saved)
+			otel, metrics, logs := resolveOtel(tc.saved)
 			if otel != tc.wantOtel {
 				t.Errorf("otel: got %v, want %v", otel, tc.wantOtel)
 			}
