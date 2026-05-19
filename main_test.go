@@ -974,6 +974,53 @@ func TestKnownFlagsCoverAllFlagDefs(t *testing.T) {
 	}
 }
 
+// TestRootTreeFlagsAreParseRecognised verifies that every flag declared on
+// rootCommand (the source of truth for the binary's CLI surface) is actually
+// handled by parseArgs. Catches the case where a flag is added to the tree
+// in commands.go but the matching switch case is forgotten in main.go's
+// parseArgs — the explicit default arm in parseArgs returns an error in
+// that scenario, which this test surfaces as a per-flag failure.
+//
+// This is the "tree → parser" half of the bidirectional parity check;
+// TestParseArgsRecognisedFlagsAreInTree below covers the inverse direction.
+func TestRootTreeFlagsAreParseRecognised(t *testing.T) {
+	for _, f := range rootCommand.AllFlags() {
+		var args []string
+		if f.TakesArg {
+			value := "value"
+			// --idle-timeout is the only flag with strict parsing; supply
+			// a valid duration so the test exercises the case arm itself
+			// rather than the duration-parse error path.
+			if f.Name == "idle-timeout" {
+				value = "30s"
+			}
+			args = []string{"--" + f.Name, value}
+		} else {
+			args = []string{"--" + f.Name}
+		}
+		if _, err := parseArgs(args); err != nil {
+			t.Errorf("parseArgs(%v) returned error %v — flag %q is declared on rootCommand but parseArgs has no case for it", args, err, f.Name)
+		}
+	}
+}
+
+// TestParseArgsRecognisedFlagsAreInTree is the inverse parity check: every
+// flag the parser thinks it owns (knownFlags) must appear in rootCommand.
+// Since knownFlags is now derived from rootCommand, this is structurally
+// guaranteed — the test is here to document the contract and to fail
+// loudly if a future refactor decouples the two.
+func TestParseArgsRecognisedFlagsAreInTree(t *testing.T) {
+	treeNames := map[string]bool{}
+	for _, f := range rootCommand.AllFlags() {
+		treeNames["--"+f.Name] = true
+	}
+	for name := range knownFlags {
+		if !treeNames[name] {
+			t.Errorf("knownFlags contains %q but it is not declared on rootCommand", name)
+		}
+	}
+}
+
 // TestResolveModel_DefaultIsGpt5_5 locks the built-in default model against
 // silent drift. When no flag is passed and saved state is empty, resolveModel
 // must return databricks-gpt-5-5. Bumping the default requires updating this
