@@ -94,7 +94,7 @@ databricks-codex --upstream https://adb-123456789.azuredatabricks.net/ai-gateway
 | `--tls-cert` | | TLS certificate file for the local proxy (requires `--tls-key`) |
 | `--tls-key` | | TLS private key file for the local proxy (requires `--tls-cert`) |
 | `--version` | | Print version and exit |
-| `--help`, `-h` | | Print wrapper flags and the full `codex --help` output, then exit |
+| `--help`, `-h` | | Print wrapper flags and exit. To see codex's own help, use `databricks-codex -- --help` (the `--` separator forwards everything after it to codex unchanged) |
 
 Headless / idle-timeout knobs live under `databricks-codex serve` (see [`serve` Subcommand](#serve-subcommand)).
 Hook installation lives under `databricks-codex hooks` (see [`hooks` Subcommand](#hooks-subcommand)).
@@ -195,7 +195,14 @@ This lets the wrapper:
 
 ### View full usage
 
-`databricks-codex --help` (or `-h`) prints the wrapper's own flags followed by the complete `codex --help` output.
+`databricks-codex --help` (or `-h`) prints the wrapper's own flags and exits. It does **not** append `codex --help` — mixing the two made it impossible to tell which flags belong to the wrapper vs the agent. To see codex's own help, use the `--` separator:
+
+```sh
+databricks-codex -- --help                # forwards --help to codex unchanged
+databricks-codex -- --model o3 -p "hi"    # forwards extra flags to codex
+```
+
+Anything after `--` is passed to `codex` verbatim.
 
 ## serve Subcommand
 

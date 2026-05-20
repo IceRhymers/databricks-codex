@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -108,7 +107,7 @@ func main() {
 	}
 
 	if a.ShowHelp {
-		handleHelp(a.Upstream)
+		handleHelp()
 		os.Exit(0)
 	}
 
@@ -612,8 +611,13 @@ func parseArgs(args []string) (*Args, error) {
 	return a, nil
 }
 
-// handleHelp prints the databricks-codex help section, then execs codex --help.
-func handleHelp(upstreamBinary string) {
+// handleHelp prints the databricks-codex help. It does NOT exec
+// `codex --help` — appending the agent's help below the wrapper's made it
+// impossible to tell which flags the wrapper owns vs which it forwards.
+// Codex's own help is reachable via the existing `--` separator:
+//
+//	databricks-codex -- --help
+func handleHelp() {
 	fmt.Printf(`databricks-codex v%s — Databricks AI Gateway wrapper for OpenAI Codex CLI
 
 Patches ~/.codex/config.toml and runs a local proxy so the Codex CLI
@@ -643,28 +647,12 @@ Subcommands:
   hooks <subcommand>           Install/uninstall SessionStart hooks (install, uninstall, session-start)
   serve [flags]                Run the proxy in headless mode (consolidates the deleted root flags)
 
-────────────────────────────────────────────────────────────────────────────────
-Codex CLI Options:
+Passthrough to codex:
+  Anything after a "--" separator is forwarded to the codex CLI unchanged.
+  Examples:
+    databricks-codex -- --help                # show codex's own help
+    databricks-codex -- --model o3 -p "hi"    # run codex with extra flags
 `, Version)
-
-	claudeBin := upstreamBinary
-	if claudeBin == "" {
-		if p, err := exec.LookPath("codex"); err == nil {
-			claudeBin = p
-		}
-	}
-
-	if claudeBin == "" {
-		fmt.Println("(codex binary not found on PATH — install from https://openai.com/codex)")
-		return
-	}
-
-	var buf bytes.Buffer
-	cmd := exec.Command(claudeBin, "--help")
-	cmd.Stdout = &buf
-	cmd.Stderr = &buf
-	_ = cmd.Run()
-	fmt.Print(buf.String())
 }
 
 // buildUpdaterConfig returns the standard updater.Config for databricks-codex.

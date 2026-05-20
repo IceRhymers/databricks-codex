@@ -166,6 +166,20 @@ func TestParseArgs_Separator(t *testing.T) {
 	}
 }
 
+// TestParseArgs_SeparatorForwardsHelp locks #95: "--" terminates wrapper
+// flag parsing, so "-- --help" must NOT trigger the wrapper's help and must
+// forward "--help" to codex verbatim. Together with handleHelp no longer
+// shelling out to `codex --help`, this is how users reach codex's own help.
+func TestParseArgs_SeparatorForwardsHelp(t *testing.T) {
+	a := mustParseArgs(t, []string{"--", "--help"})
+	if a.ShowHelp {
+		t.Error("expected ShowHelp=false when --help appears after --")
+	}
+	if len(a.CodexArgs) != 1 || a.CodexArgs[0] != "--help" {
+		t.Errorf("expected CodexArgs=[--help], got %v", a.CodexArgs)
+	}
+}
+
 func TestParseArgs_PassthroughArgs(t *testing.T) {
 	a := mustParseArgs(t, []string{"prompt text", "--unknown-flag", "gpt-4"})
 	if len(a.CodexArgs) != 3 {
@@ -446,7 +460,7 @@ func TestHandlePrintEnv_ContainsModel(t *testing.T) {
 
 func TestHandleHelp_ContainsDatabricksCodex(t *testing.T) {
 	out := captureStdout(func() {
-		handleHelp("")
+		handleHelp()
 	})
 	if !strings.Contains(out, "databricks-codex") {
 		t.Errorf("expected help output to contain 'databricks-codex', got:\n%s", out)
@@ -455,26 +469,35 @@ func TestHandleHelp_ContainsDatabricksCodex(t *testing.T) {
 
 func TestHandleHelp_ContainsConfigSubcommand(t *testing.T) {
 	out := captureStdout(func() {
-		handleHelp("")
+		handleHelp()
 	})
 	if !strings.Contains(out, "config") {
 		t.Errorf("expected help output to advertise the config subcommand, got:\n%s", out)
 	}
 }
 
-func TestHandleHelp_ContainsCodexCLISeparator(t *testing.T) {
+// TestHandleHelp_DocumentsPassthrough locks #95: wrapper help must NOT
+// append codex's own --help, and MUST document the `--` passthrough escape
+// hatch so users still know how to reach codex's flags.
+func TestHandleHelp_DocumentsPassthrough(t *testing.T) {
 	out := captureStdout(func() {
-		handleHelp("")
+		handleHelp()
 	})
-	if !strings.Contains(out, "Codex CLI Options:") {
-		t.Errorf("expected help output to contain 'Codex CLI Options:', got:\n%s", out)
+	if strings.Contains(out, "Codex CLI Options:") {
+		t.Errorf("wrapper help must not append codex --help under a 'Codex CLI Options:' divider, got:\n%s", out)
+	}
+	if !strings.Contains(out, "Passthrough to codex:") {
+		t.Errorf("expected help output to document the -- passthrough, got:\n%s", out)
+	}
+	if !strings.Contains(out, "databricks-codex -- --help") {
+		t.Errorf("expected help output to show the `-- --help` example, got:\n%s", out)
 	}
 }
 
 func TestHandleHelp_NoBareNumberMinutesWording(t *testing.T) {
 	// Per #70: help text must not advertise the bare-int minutes shortcut.
 	out := captureStdout(func() {
-		handleHelp("")
+		handleHelp()
 	})
 	if strings.Contains(out, "bare number = minutes") {
 		t.Errorf("help text should no longer advertise 'bare number = minutes', got:\n%s", out)
@@ -533,7 +556,7 @@ func TestParseArgs_NoUpdateCheck(t *testing.T) {
 
 func TestHandleHelp_AllFlagsPresent(t *testing.T) {
 	out := captureStdout(func() {
-		handleHelp("")
+		handleHelp()
 	})
 	// Legacy hook flags (--install-hooks / --uninstall-hooks /
 	// --headless-ensure) were lifted to the `hooks` subcommand in #88; the
@@ -553,7 +576,7 @@ func TestHandleHelp_AllFlagsPresent(t *testing.T) {
 // root help text. If a future refactor re-adds them, this test fires.
 func TestHandleHelp_LegacyHeadlessFlagsAbsent(t *testing.T) {
 	out := captureStdout(func() {
-		handleHelp("")
+		handleHelp()
 	})
 	for _, flag := range []string{"--headless", "--idle-timeout"} {
 		if strings.Contains(out, flag) {
@@ -565,7 +588,7 @@ func TestHandleHelp_LegacyHeadlessFlagsAbsent(t *testing.T) {
 func TestHandleHelp_LegacyOtelFlagsAbsent(t *testing.T) {
 	// Locks the breaking surface: #87 removed these from the root.
 	out := captureStdout(func() {
-		handleHelp("")
+		handleHelp()
 	})
 	for _, flag := range []string{"--otel", "--no-otel", "--no-otel-metrics", "--no-otel-logs", "--otel-metrics-table", "--otel-logs-table", "--print-env"} {
 		if strings.Contains(out, flag) {
@@ -576,7 +599,7 @@ func TestHandleHelp_LegacyOtelFlagsAbsent(t *testing.T) {
 
 func TestHandleHelp_ContainsVersion(t *testing.T) {
 	out := captureStdout(func() {
-		handleHelp("")
+		handleHelp()
 	})
 	if !strings.Contains(out, fmt.Sprintf("databricks-codex v%s", Version)) {
 		t.Errorf("expected help output to contain version string, got:\n%s", out)
