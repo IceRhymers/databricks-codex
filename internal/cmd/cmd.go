@@ -172,9 +172,14 @@ func (c Command) CompletionFlags() []completion.FlagDef {
 // CompletionSubcommands returns the immediate children as
 // pkg/completion.SubcommandDef. The conversion is RECURSIVE: each child
 // carries its own Flags and Subcommands so the shell-completion generator
-// can offer nested completion (e.g. `hooks install --<TAB>` →
-// install-scoped flags). Flags include each child's Persistent ++ Flags so
-// inherited flags surface alongside the child's own.
+// can offer nested completion (e.g. `config <TAB>` → otel/show, then
+// `config otel <TAB>` → enable/disable; `hooks install --<TAB>` →
+// install-scoped flags). Flags include each child's Persistent ++ Flags
+// so inherited flags surface alongside the child's own.
+//
+// Added in #87 alongside the databricks-claude v0.17.0 → v1.0.2 bump that
+// exposes pkg/completion.SubcommandDef — the foundation in #86 deliberately
+// omitted this method because the pinned dep didn't carry the type yet.
 func (c Command) CompletionSubcommands() []completion.SubcommandDef {
 	out := make([]completion.SubcommandDef, len(c.Subcommands))
 	for i, s := range c.Subcommands {

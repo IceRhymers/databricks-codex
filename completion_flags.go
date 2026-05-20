@@ -27,13 +27,6 @@ var flagDefs = func() []completion.FlagDef {
 		"verbose",
 		"version",
 		"help",
-		"print-env",
-		"otel",
-		"no-otel",
-		"no-otel-metrics",
-		"no-otel-logs",
-		"otel-metrics-table",
-		"otel-logs-table",
 		"model",
 		"upstream",
 		"log-file",
@@ -68,8 +61,10 @@ var knownFlags = rootCommand.KnownFlags()
 
 // knownSubcommands is the recursive shell-completion subcommand tree fed
 // to pkg/completion so `databricks-codex <TAB>` offers completion / update
-// / hooks, and `databricks-codex hooks <TAB>` offers install / uninstall
-// / session-start. #88 lifts this from rootCommand alongside the dep bump
-// to databricks-claude v1.0.2 (which exports SubcommandDef); see the
-// doc-comment in internal/cmd/cmd.go for the prior #86 omission.
+// / config / hooks, and `databricks-codex hooks <TAB>` offers install /
+// uninstall / session-start, `databricks-codex config <TAB>` offers otel
+// / show, etc. #87 introduced this wire-up alongside the dep bump to
+// databricks-claude v1.0.2 (which exports SubcommandDef); #88 adds the
+// hooks branch. See the doc-comment in internal/cmd/cmd.go for the prior
+// #86 omission.
 var knownSubcommands = rootCommand.CompletionSubcommands()

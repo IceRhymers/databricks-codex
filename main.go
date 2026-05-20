@@ -49,6 +49,17 @@ func main() {
 		os.Exit(0)
 	}
 
+	// `config` subcommand — persistent config editor (OTEL signals,
+	// resolved-config diagnostic). Consolidates the 7 flags removed from the
+	// root in #87 — the flags that mutate state for FUTURE runs rather than
+	// affecting the current invocation. The transparent-proxy launcher path
+	// below is intentionally flag-driven and bare; persistent state mutation
+	// lives behind this tree.
+	if len(os.Args) >= 2 && os.Args[1] == "config" {
+		runConfigCommand(os.Args[2:])
+		return
+	}
+
 	// update — force-check for a newer release and print instructions.
 	if len(os.Args) >= 2 && os.Args[1] == "update" {
 		if os.Getenv("DATABRICKS_NO_UPDATE_CHECK") == "1" {
@@ -188,8 +199,7 @@ func main() {
 
 	// --- Seed token cache ---
 	tp := NewTokenProvider("", profile)
-	initialToken, err := tp.Token(context.Background())
-	if err != nil {
+	if _, err := tp.Token(context.Background()); err != nil {
 		log.Fatalf("databricks-codex: failed to fetch initial token: %v", err)
 	}
 
@@ -207,41 +217,18 @@ func main() {
 	log.Printf("databricks-codex: gateway URL: %s", gatewayURL)
 
 	// --- OTEL tables ---
-	// Compute the final (otel, metricsTable, logsTable) tuple from flags + state.
-	// Saved state is read once and passed in so the helper is pure & testable.
+	// Compute the final (otel, metricsTable, logsTable) tuple from saved
+	// state. With #87, the persistent-config editor (`databricks-codex config
+	// otel enable/disable`) is the only path that mutates these — the
+	// regular session flow is read-only.
 	saved := loadState()
-	otel, otelMetricsTable, otelLogsTable := resolveOtel(a, saved)
+	otel, otelMetricsTable, otelLogsTable := resolveOtel(saved)
 
-	// Log informational lines and persist any explicit table flags.
-	if !a.OtelMetricsTableSet && otelMetricsTable != "" && otelMetricsTable != "main.codex_telemetry.codex_otel_metrics" {
+	if otelMetricsTable != "" {
 		log.Printf("databricks-codex: using saved otel-metrics-table: %s", otelMetricsTable)
 	}
-	if a.OtelMetricsTableSet {
-		s := loadState()
-		s.OtelMetricsTable = otelMetricsTable
-		if err := saveState(s); err != nil {
-			log.Printf("databricks-codex: failed to save otel-metrics-table: %v", err)
-		} else {
-			log.Printf("databricks-codex: saved otel-metrics-table %q for future sessions", otelMetricsTable)
-		}
-	}
-	if !a.OtelLogsTableSet && otelLogsTable != "" && otelLogsTable != "main.codex_telemetry.codex_otel_logs" {
+	if otelLogsTable != "" {
 		log.Printf("databricks-codex: using saved otel-logs-table: %s", otelLogsTable)
-	}
-	if a.OtelLogsTableSet {
-		s := loadState()
-		s.OtelLogsTable = otelLogsTable
-		if err := saveState(s); err != nil {
-			log.Printf("databricks-codex: failed to save otel-logs-table: %v", err)
-		} else {
-			log.Printf("databricks-codex: saved otel-logs-table %q for future sessions", otelLogsTable)
-		}
-	}
-
-	// --- Print env and exit if requested ---
-	if a.PrintEnv {
-		handlePrintEnv(host, gatewayURL, initialToken, profile, model, otelMetricsTable, otelLogsTable)
-		os.Exit(0)
 	}
 
 	// Verify codex is on PATH before starting proxy (skip in headless mode).
@@ -422,32 +409,31 @@ func runHeadless(proxyURL string, ln net.Listener, isOwner bool, refcountPath st
 }
 
 // Args holds all parsed databricks-codex flags plus the residual codex args.
+//
+// #87 removed the persistent-config root flags (--otel, --no-otel*,
+// --otel-*-table, --print-env). They live under `databricks-codex config
+// otel {enable|disable}` and `databricks-codex config show` now and have no
+// session-only counterparts — the persistent-config editor IS the surface.
+// The OTEL state still drives the regular session: resolveOtel reads the
+// state file directly to decide whether to emit OTEL endpoints into the
+// proxy + config.toml.
 type Args struct {
-	Verbose             bool
-	Version             bool
-	ShowHelp            bool
-	PrintEnv            bool
-	NoOtel              bool
-	NoOtelMetrics       bool
-	NoOtelLogs          bool
-	OtelLogsTable       string
-	OtelLogsTableSet    bool
-	OtelMetricsTable    string
-	OtelMetricsTableSet bool
-	Upstream            string
-	LogFile             string
-	Profile             string
-	Otel                bool
-	ProxyAPIKey         string
-	TLSCert             string
-	TLSKey              string
-	Model               string
-	ModelSet            bool
-	PortFlag            int
-	Headless            bool
-	IdleTimeout         time.Duration
-	NoUpdateCheck       bool
-	CodexArgs           []string
+	Verbose       bool
+	Version       bool
+	ShowHelp      bool
+	Upstream      string
+	LogFile       string
+	Profile       string
+	ProxyAPIKey   string
+	TLSCert       string
+	TLSKey        string
+	Model         string
+	ModelSet      bool
+	PortFlag      int
+	Headless      bool
+	IdleTimeout   time.Duration
+	NoUpdateCheck bool
+	CodexArgs     []string
 }
 
 // parseArgs separates databricks-codex flags from codex flags.
@@ -490,24 +476,6 @@ func parseArgs(args []string) (*Args, error) {
 
 			if knownFlags[name] {
 				switch name {
-				case "--otel-logs-table":
-					if value != "" {
-						a.OtelLogsTable = value
-						a.OtelLogsTableSet = true
-					} else if i+1 < len(args) {
-						i++
-						a.OtelLogsTable = args[i]
-						a.OtelLogsTableSet = true
-					}
-				case "--otel-metrics-table":
-					if value != "" {
-						a.OtelMetricsTable = value
-						a.OtelMetricsTableSet = true
-					} else if i+1 < len(args) {
-						i++
-						a.OtelMetricsTable = args[i]
-						a.OtelMetricsTableSet = true
-					}
 				case "--upstream":
 					if value != "" {
 						a.Upstream = value
@@ -565,16 +533,6 @@ func parseArgs(args []string) (*Args, error) {
 					a.Version = true
 				case "--help":
 					a.ShowHelp = true
-				case "--print-env":
-					a.PrintEnv = true
-				case "--otel":
-					a.Otel = true
-				case "--no-otel":
-					a.NoOtel = true
-				case "--no-otel-metrics":
-					a.NoOtelMetrics = true
-				case "--no-otel-logs":
-					a.NoOtelLogs = true
 				case "--port":
 					if value != "" {
 						a.PortFlag, _ = strconv.Atoi(value)
@@ -633,15 +591,8 @@ Databricks-Codex Flags:
   --profile string      Databricks CLI profile (saved for future sessions; default: env or "DEFAULT")
   --model string        Model name (saved for future sessions; default: "databricks-gpt-5-5")
   --upstream string     Override the AI Gateway URL (default: auto-discovered)
-  --print-env           Print resolved configuration and exit (token redacted)
   --verbose, -v         Enable debug logging to stderr
   --log-file string     Write debug logs to a file (combinable with --verbose)
-  --otel                       Enable OpenTelemetry export (metrics + logs)
-  --no-otel                    Disable OpenTelemetry for this session (saved tables preserved)
-  --otel-metrics-table string  Unity Catalog table for OTEL metrics (saved; default: main.codex_telemetry.codex_otel_metrics when --otel is set)
-  --otel-logs-table string     Unity Catalog table for OTEL logs (saved; derived from metrics table when omitted)
-  --no-otel-metrics            Disable metrics for this session (saved table preserved)
-  --no-otel-logs               Disable logs for this session (saved table preserved)
   --proxy-api-key string    Require this API key on all proxy requests (default: disabled)
   --tls-cert string         Path to TLS certificate file (requires --tls-key)
   --tls-key string          Path to TLS private key file (requires --tls-cert)
@@ -653,6 +604,7 @@ Databricks-Codex Flags:
   --help, -h            Show this help message
 
 Subcommands:
+  config                       Persistent config editor (otel enable/disable, show)
   completion <shell>           Generate shell completions (bash, zsh, fish)
   update                       Check for a newer release and print upgrade instructions
   hooks <subcommand>           Install/uninstall SessionStart hooks (install, uninstall, session-start)
@@ -758,77 +710,37 @@ func resolveProfile(flagValue string, savedValue string) string {
 	return "DEFAULT"
 }
 
-// resolveOtel is the orchestration: given parsed flags + saved state, decide
-// whether OTel is on for this session and which (metrics, logs) tables to use.
+// resolveOtel reads the persistent state and returns the (otel, metrics,
+// logs) tuple the regular session path uses to drive proxy + config.toml
+// patching. Pure function over state — no flag input — because #87 removed
+// the session-time OTEL flags. The persistent-config editor
+// (`databricks-codex config otel enable/disable`) is the only writer; the
+// session is a read-only consumer.
 //
-// Semantics mirror databricks-claude:
+// Semantics:
 //
-//	OTel is "on" if any of: --otel, --otel-metrics-table, --otel-logs-table,
-//	or saved state has any table set — UNLESS --no-otel was passed, which
-//	is the unconditional kill switch.
-//
-//	--no-otel-metrics / --no-otel-logs disable that specific signal for the
-//	current session but leave OTel itself on (so the other signal keeps
-//	exporting) and leave the saved table preference intact.
-//
-// Both returned table strings are empty when their signal is disabled.
-func resolveOtel(a *Args, saved persistentState) (otel bool, metricsTable string, logsTable string) {
-	otel = a.Otel
-	if !otel && !a.NoOtel {
-		if a.OtelMetricsTableSet || a.OtelLogsTableSet || saved.OtelMetricsTable != "" || saved.OtelLogsTable != "" {
-			otel = true
-		}
+//   - A signal is on iff the corresponding *Disabled bit is unset AND the
+//     corresponding table name is non-empty in state.
+//   - Returned table strings are empty when their signal is off (so the
+//     proxy's tomlconfig.Patch removes the [otel] section when both are
+//     empty rather than leaving stale exporter lines).
+//   - OTel as a whole is on iff at least one signal is on.
+func resolveOtel(saved persistentState) (otel bool, metricsTable string, logsTable string) {
+	if !saved.OtelMetricsDisabled && saved.OtelMetricsTable != "" {
+		metricsTable = saved.OtelMetricsTable
 	}
-	if a.NoOtel {
-		otel = false
+	if !saved.OtelLogsDisabled && saved.OtelLogsTable != "" {
+		logsTable = saved.OtelLogsTable
 	}
-
-	if !a.NoOtelMetrics {
-		metricsTable = resolveOtelMetricsTable(a.OtelMetricsTable, a.OtelMetricsTableSet, saved.OtelMetricsTable, otel)
-	}
-	if !a.NoOtelLogs {
-		logsTable = resolveOtelLogsTable(a.OtelLogsTable, a.OtelLogsTableSet, saved.OtelLogsTable, metricsTable, otel)
-	}
+	otel = metricsTable != "" || logsTable != ""
 	return otel, metricsTable, logsTable
-}
-
-// resolveOtelLogsTable returns the OTEL logs table using the resolution chain:
-// explicit flag → saved state → derive-from-metrics-table → default.
-// Returns empty string when otel is disabled.
-func resolveOtelLogsTable(flagValue string, flagSet bool, savedValue string, metricsTable string, otel bool) string {
-	if !otel {
-		return ""
-	}
-	if flagSet && flagValue != "" {
-		return flagValue
-	}
-	if savedValue != "" {
-		return savedValue
-	}
-	if metricsTable != "" {
-		return deriveLogsTable(metricsTable)
-	}
-	return "main.codex_telemetry.codex_otel_logs"
-}
-
-// resolveOtelMetricsTable returns the OTEL metrics table using the resolution chain:
-// explicit flag → saved state → default. Returns empty string when otel is disabled.
-func resolveOtelMetricsTable(flagValue string, flagSet bool, savedValue string, otel bool) string {
-	if !otel {
-		return ""
-	}
-	if flagSet && flagValue != "" {
-		return flagValue
-	}
-	if savedValue != "" {
-		return savedValue
-	}
-	return "main.codex_telemetry.codex_otel_metrics"
 }
 
 // deriveLogsTable derives the OTEL logs table name from a metrics table name.
 // If the metrics table ends with "_otel_metrics", replace that suffix with "_otel_logs".
-// Otherwise append "_otel_logs". Ported from databricks-claude/main.go.
+// Otherwise append "_otel_logs". Ported from databricks-claude/main.go and
+// kept exported (within-package) so cli_config.go's resolver can reuse it
+// for the `config otel enable --metrics-table` derivation.
 func deriveLogsTable(metricsTable string) string {
 	if metricsTable == "" {
 		return ""
