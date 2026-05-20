@@ -9,7 +9,12 @@ Transparent wrapper for the OpenAI Codex CLI that auto-injects Databricks OAuth 
 
 | File | Description |
 |------|-------------|
-| `main.go` | CLI entry point: flag parsing, resolution chains for profile/model/otel-logs-table, proxy startup, config.toml patching, and Codex child process lifecycle |
+| `main.go` | CLI entry point: flag parsing, resolution chains for profile/model/otel-logs-table, `runProxyMode` launcher, config.toml patching, and Codex child process lifecycle. `runProxyMode` is shared by the transparent-wrapper path and the `serve` subcommand path. |
+| `serve_cmd.go` | `runServeCommand` dispatcher for the `serve` subcommand (#89). Replaces the legacy `--headless` / `--idle-timeout` root flags. Constructs an `Args` struct with `Headless=true` and the parsed idle timeout, then calls `runProxyMode`. |
+| `cli_config.go` | `runConfigCommand` dispatcher for the `config` subcommand (#87). Persistent-config editor for OTEL signals + diagnostic `config show`. |
+| `hooks.go` | `headlessEnsure` / `installHooks` / `uninstallHooks`. The hook spawn path now invokes `databricks-codex serve --port=N` (#89) — set via `headless.Config.EnsureCommand`. |
+| `hooks_cmd.go` | `runHooksCommand` dispatcher for the `hooks` subcommand (#88). install / uninstall / session-start. |
+| `commands.go` | Source-of-truth `cmd.Command` declarations: `rootCommand`, `configCommand`, `hooksCommand`, `serveCommand`. Drives `parseArgs`, completion scripts, and help rendering. |
 | `token.go` | `databricksFetcher` implements `tokencache.TokenFetcher` via `databricks auth token`. Also `DiscoverHost` (via `databricks auth env`) and `ConstructGatewayURL` (SCIM `/Me` for workspace ID) |
 | `config.go` | `ConfigManager` coordinates tomlconfig, filelock, and session registry. `Setup()` backs up + patches; `Restore()` handles multi-session handoff or full restore |
 | `state.go` | `persistentState` JSON at `~/.codex/.databricks-codex.json` — persists profile, model, and otel-logs-table across sessions |
