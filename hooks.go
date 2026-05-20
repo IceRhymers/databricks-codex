@@ -26,13 +26,29 @@ var hooksKeyRegexp = regexp.MustCompile(`(?m)^\s*hooks\s*=`)
 //
 // The proxy shuts itself down via idle timeout — there is no corresponding
 // release hook because Codex CLI has no session-end event.
+//
+// #89: the spawned subprocess invokes the new `serve` subcommand instead of
+// the deleted `--headless` root flag. headless.Config.EnsureCommand replaces
+// the default `[]string{"--headless"}` prefix with `[]string{"serve"}`, so
+// pkg/headless.buildArgs now emits `databricks-codex serve --port=N
+// [--tls-cert=... --tls-key=...]`. Without this wiring, every SessionStart
+// hook firing would spawn a process that immediately fails arg parsing.
 func headlessEnsure(port int) error {
 	s := loadState()
+	return headless.Ensure(headlessEnsureConfig(port, s))
+}
+
+// headlessEnsureConfig assembles the headless.Config that headlessEnsure
+// passes to headless.Ensure. Extracted so a unit test can verify the
+// load-bearing fields (EnsureCommand routing through `serve`, the
+// $DATABRICKS_CODEX_MANAGED guard, the codex refcount path) without
+// spawning a real subprocess. Pure projection over (port, state).
+func headlessEnsureConfig(port int, s persistentState) headless.Config {
 	scheme := "http"
 	if s.TLSCert != "" {
 		scheme = "https"
 	}
-	return headless.Ensure(headless.Config{
+	return headless.Config{
 		Port:          port,
 		Scheme:        scheme,
 		TLSCert:       s.TLSCert,
@@ -40,7 +56,10 @@ func headlessEnsure(port int) error {
 		ManagedEnvVar: "DATABRICKS_CODEX_MANAGED",
 		LogPrefix:     "databricks-codex",
 		RefcountPath:  refcount.PathForPort(".databricks-codex-sessions", port),
-	})
+		// #89: spawn `databricks-codex serve --port=N` instead of the
+		// removed `databricks-codex --headless --port=N`.
+		EnsureCommand: []string{"serve"},
+	}
 }
 
 // installHooks merges the databricks-codex SessionStart and Stop hooks into

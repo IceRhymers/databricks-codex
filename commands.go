@@ -25,9 +25,10 @@ import (
 // editor (the legacy --otel*/--print-env root flags) onto a discoverable
 // `config` subcommand; #88 lifts the hooks lifecycle flags
 // (--install-hooks / --uninstall-hooks / --headless-ensure) onto a `hooks`
-// subcommand. Both sets of legacy root-flag spellings are GONE in this
-// revision. serve is still tracked under #89. --profile and --port live on
-// Persistent so subcommand inheritance works for the migrated children.
+// subcommand. #89 lifts the remaining session-mode root flags (--headless,
+// --idle-timeout) onto a `serve` subcommand. All three sets of legacy
+// root-flag spellings are GONE in this revision. --profile and --port live
+// on Persistent so subcommand inheritance works for the migrated children.
 var rootCommand = cmd.Command{
 	Name:  "databricks-codex",
 	Short: "Databricks AI Gateway wrapper for OpenAI Codex CLI",
@@ -60,9 +61,10 @@ var rootCommand = cmd.Command{
 
 	// Order matches the legacy flagDefs slice so the bash/zsh/fish
 	// completion output stays byte-identical with the pre-tree binary
-	// for the flags that survived #87/#88. The migrated OTEL/--print-env
-	// and hooks-lifecycle flags are gone from BOTH this slice and
-	// completion_flags.go's `order` — that is the breaking surface change.
+	// for the flags that survived #87/#88/#89. The migrated OTEL/--print-env,
+	// hooks-lifecycle, and session-mode flags are gone from BOTH this slice
+	// and completion_flags.go's `order` — that is the breaking surface
+	// change.
 	Flags: []cmd.FlagDef{
 		{Name: "verbose", Short: "v", Description: "Enable debug logging to stderr"},
 		{Name: "version", Description: "Print version and exit"},
@@ -73,21 +75,20 @@ var rootCommand = cmd.Command{
 		{Name: "proxy-api-key", Description: "Require this API key on all proxy requests", TakesArg: true},
 		{Name: "tls-cert", Description: "TLS certificate file for the local proxy (requires --tls-key)", TakesArg: true, Completer: "__files"},
 		{Name: "tls-key", Description: "TLS private key file for the local proxy (requires --tls-cert)", TakesArg: true, Completer: "__files"},
-		{Name: "headless", Description: "Start proxy without launching codex (for IDE extensions or hooks)"},
-		{Name: "idle-timeout", Description: "Idle timeout for headless mode (default: 30m; 0 disables)", TakesArg: true, Default: "30m"},
 		{Name: "no-update-check", Description: "Skip the automatic update check on startup", EnvVar: "DATABRICKS_NO_UPDATE_CHECK"},
 	},
 
 	// Subcommands declared on the root. completion and update dispatch
 	// from main.go directly. config (added in #87) carries its own
 	// dispatcher in cli_config.go. hooks (added in #88) carries its own
-	// dispatcher in cli_hooks.go. serve remains as root flags for now —
-	// see #89.
+	// dispatcher in hooks_cmd.go. serve (added in #89) carries its own
+	// dispatcher in serve_cmd.go.
 	Subcommands: []cmd.Command{
 		completionCommand,
 		updateCommand,
 		configCommand,
 		hooksCommand,
+		serveCommand,
 	},
 }
 
@@ -230,6 +231,46 @@ var hooksCommand = cmd.Command{
 				{Name: "help", Short: "h", Description: "Show help message"},
 			},
 		},
+	},
+}
+
+// serveCommand declares the `serve` subcommand introduced in #89.
+// Consolidates the legacy `--headless` and `--idle-timeout` root flags into
+// a discoverable subcommand. Mirrors databricks-claude #174's `serve
+// --session-mode` entrypoint with a deliberately smaller scope: codex has
+// no daemon mode (no LaunchAgent/Service equivalent), so install/uninstall/
+// status sub-subcommands are deferred.
+//
+// Tree shape:
+//
+//	serve   [--idle-timeout D] [--profile P] [--port N] [--model M]
+//	        [--upstream U] [--log-file F] [--verbose|-v]
+//	        [--proxy-api-key K] [--tls-cert C] [--tls-key K]
+//	        [--no-update-check]
+//
+// Behavior is byte-identical with the deleted `databricks-codex --headless`
+// path: the runner constructs the same Args struct that parseArgs used to,
+// sets Headless=true, and dispatches into the shared runProxyMode launcher.
+// The hook-spawn path (headlessEnsure → headless.Ensure) is updated to
+// invoke `databricks-codex serve --port=N` instead of the removed
+// `--headless --port=N` so the SessionStart hook keeps working.
+var serveCommand = cmd.Command{
+	Name:  "serve",
+	Short: "Run the proxy in headless mode (consolidates --headless / --idle-timeout)",
+	Long:  serveHelpTemplate,
+	Flags: []cmd.FlagDef{
+		{Name: "idle-timeout", Description: "Idle timeout (default: 30m; 0 disables; e.g. 30s, 5m, 1h)", TakesArg: true, Default: "30m"},
+		{Name: "profile", Description: "Databricks CLI profile (default: state file > DEFAULT)", TakesArg: true, Completer: "__databricks_profiles", StateKey: "profile", MDMKey: "databricksProfile", Default: "DEFAULT"},
+		{Name: "port", Description: "Proxy listen port (default: saved state > 49154)", TakesArg: true, StateKey: "port", Default: "49154"},
+		{Name: "model", Description: "Model to use (saved for future sessions)", TakesArg: true, StateKey: "model"},
+		{Name: "upstream", Description: "Override the AI Gateway URL (default: auto-discovered)", TakesArg: true},
+		{Name: "log-file", Description: "Write debug logs to file (combinable with --verbose)", TakesArg: true, Completer: "__files"},
+		{Name: "verbose", Short: "v", Description: "Enable debug logging to stderr"},
+		{Name: "proxy-api-key", Description: "Require this API key on all proxy requests", TakesArg: true},
+		{Name: "tls-cert", Description: "TLS certificate file for the local proxy (requires --tls-key)", TakesArg: true, Completer: "__files"},
+		{Name: "tls-key", Description: "TLS private key file for the local proxy (requires --tls-cert)", TakesArg: true, Completer: "__files"},
+		{Name: "no-update-check", Description: "Skip the automatic update check on startup", EnvVar: "DATABRICKS_NO_UPDATE_CHECK"},
+		{Name: "help", Short: "h", Description: "Show help message"},
 	},
 }
 
@@ -431,7 +472,56 @@ MUST remain fast and fail-fast: no interactive auth flow. If the user
 hasn't run 'databricks auth login' yet, this command exits 0 silently
 so the codex session is not blocked on a hook timeout.
 
+Internally spawns 'databricks-codex serve --port=N' (the #89 replacement
+for the deleted '--headless' root flag).
+
 Flags:
   --port int    Override saved port (default: saved state > 49154)
   --help, -h    Show this help message
+`
+
+const serveHelpTemplate = `Usage: databricks-codex serve [flags]
+
+Run the proxy in headless mode without launching codex. Replaces the
+legacy '--headless' and '--idle-timeout' root flags (#89) with a
+discoverable subcommand. Behavior is byte-identical with the removed
+flags — the hooks SessionStart entry and IDE extensions can call this
+directly to bring the proxy up and read PROXY_URL=... from stdout.
+
+Use this when:
+  - An IDE extension needs the proxy running but doesn't want a child
+    codex process. Read PROXY_URL=... from stdout, point your client
+    at it, then SIGTERM (or POST /shutdown) when done.
+  - Bringing up the proxy from a SessionStart hook. 'hooks install'
+    wires this for you under the hood.
+
+The proxy exits when:
+  - SIGINT or SIGTERM is received.
+  - POST /shutdown is hit on the proxy URL.
+  - --idle-timeout elapses with zero in-flight requests (default 30m;
+    0 disables idle shutdown).
+
+Flags:
+  --idle-timeout duration  Idle timeout (default 30m, 0 disables; e.g. 30s, 5m, 1h)
+  --profile string         Databricks CLI profile (default: state > DEFAULT)
+  --port int               Proxy listen port (default: state > 49154)
+  --model string           Model name (saved for future sessions)
+  --upstream string        Override the AI Gateway URL (default: auto-discovered)
+  --log-file string        Write debug logs to file (combinable with --verbose)
+  --verbose, -v            Enable debug logging to stderr
+  --proxy-api-key string   Require this API key on all proxy requests
+  --tls-cert string        TLS certificate file (requires --tls-key)
+  --tls-key string         TLS private key file (requires --tls-cert)
+  --no-update-check        Skip the automatic update check on startup
+  --help, -h               Show this help message
+
+Examples:
+  # Start the proxy with the default 30-minute idle timeout:
+  databricks-codex serve
+
+  # Start with a 5-minute idle timeout (test/CI scenarios):
+  databricks-codex serve --idle-timeout 5m
+
+  # Start with idle shutdown disabled (long-running IDE sessions):
+  databricks-codex serve --idle-timeout 0
 `

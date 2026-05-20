@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 )
 
 // mustParseArgs is a test helper that calls parseArgs and fails the test on error.
@@ -132,8 +131,15 @@ func TestParseArgs_EmptyArgs(t *testing.T) {
 	if len(a.CodexArgs) != 0 {
 		t.Errorf("expected no CodexArgs, got %v", a.CodexArgs)
 	}
-	if a.IdleTimeout != 30*time.Minute {
-		t.Errorf("expected default IdleTimeout=30m, got %v", a.IdleTimeout)
+	// #89 removed the --idle-timeout root flag; parseArgs no longer
+	// initialises Args.IdleTimeout. The default 30m default is now
+	// applied by buildServeArgs (serve_cmd.go); see
+	// TestBuildServeArgs_DefaultIdleTimeout.
+	if a.IdleTimeout != 0 {
+		t.Errorf("expected zero IdleTimeout from parseArgs (no longer parsed), got %v", a.IdleTimeout)
+	}
+	if a.Headless {
+		t.Error("expected Headless=false from parseArgs (no longer parsed; set only by runServeCommand)")
 	}
 }
 
@@ -213,52 +219,14 @@ func TestParseArgs_ModelNotPassedThrough(t *testing.T) {
 }
 
 // --- --idle-timeout strict parsing tests ---
-
-func TestParseArgs_IdleTimeout_Seconds(t *testing.T) {
-	a := mustParseArgs(t, []string{"--idle-timeout", "30s"})
-	if a.IdleTimeout != 30*time.Second {
-		t.Errorf("expected 30s, got %v", a.IdleTimeout)
-	}
-}
-
-func TestParseArgs_IdleTimeout_Minutes(t *testing.T) {
-	a := mustParseArgs(t, []string{"--idle-timeout", "5m"})
-	if a.IdleTimeout != 5*time.Minute {
-		t.Errorf("expected 5m, got %v", a.IdleTimeout)
-	}
-}
-
-func TestParseArgs_IdleTimeout_Hours(t *testing.T) {
-	a := mustParseArgs(t, []string{"--idle-timeout", "1h"})
-	if a.IdleTimeout != time.Hour {
-		t.Errorf("expected 1h, got %v", a.IdleTimeout)
-	}
-}
-
-func TestParseArgs_IdleTimeout_Equals(t *testing.T) {
-	a := mustParseArgs(t, []string{"--idle-timeout=2h30m"})
-	if a.IdleTimeout != 2*time.Hour+30*time.Minute {
-		t.Errorf("expected 2h30m, got %v", a.IdleTimeout)
-	}
-}
-
-func TestParseArgs_IdleTimeout_BareIntRejected(t *testing.T) {
-	if _, err := parseArgs([]string{"--idle-timeout", "30"}); err == nil {
-		t.Error("expected error for bare int --idle-timeout, got nil")
-	}
-}
-
-func TestParseArgs_IdleTimeout_GarbageRejected(t *testing.T) {
-	if _, err := parseArgs([]string{"--idle-timeout", "30mins"}); err == nil {
-		t.Error("expected error for '30mins' --idle-timeout, got nil")
-	}
-}
-
-func TestParseArgs_IdleTimeout_EmptyRejected(t *testing.T) {
-	if _, err := parseArgs([]string{"--idle-timeout="}); err == nil {
-		t.Error("expected error for empty --idle-timeout, got nil")
-	}
-}
+//
+// #89 removed --idle-timeout from the root flag set; parseArgs no longer
+// recognises it. The duration-parsing strict-validation surface (seconds /
+// minutes / hours / equals / bare-int rejected / garbage rejected / empty
+// rejected) lives on the serve subcommand now and is exercised by
+// TestBuildServeArgs_IdleTimeout* in serve_cmd_test.go. The legacy
+// --idle-timeout root flag falls through to CodexArgs (verified by
+// TestParseArgs_Table's "legacy --idle-timeout passes through" case).
 
 // Table-driven comprehensive test for parseArgs.
 func TestParseArgs_Table(t *testing.T) {
@@ -280,7 +248,6 @@ func TestParseArgs_Table(t *testing.T) {
 		{name: "--profile=value", args: []string{"--profile=aidev"}, want: Args{Profile: "aidev"}},
 		{name: "--model", args: []string{"--model", "my-model"}, want: Args{Model: "my-model", ModelSet: true}},
 		{name: "--port", args: []string{"--port", "9999"}, want: Args{PortFlag: 9999}},
-		{name: "--headless", args: []string{"--headless"}, want: Args{Headless: true}},
 		{name: "--no-update-check", args: []string{"--no-update-check"}, want: Args{NoUpdateCheck: true}},
 		{
 			// #88 removed --install-hooks; the legacy flag is no longer in
@@ -298,6 +265,22 @@ func TestParseArgs_Table(t *testing.T) {
 			name: "legacy --headless-ensure now passes through to codex",
 			args: []string{"--headless-ensure"},
 			want: Args{CodexArgs: []string{"--headless-ensure"}},
+		},
+		{
+			// #89 removed --headless; the legacy flag is no longer in
+			// knownFlags, so parseArgs forwards it to codex unchanged.
+			// Users should migrate to `databricks-codex serve`.
+			name: "legacy --headless now passes through to codex",
+			args: []string{"--headless"},
+			want: Args{CodexArgs: []string{"--headless"}},
+		},
+		{
+			// #89 removed --idle-timeout. parseArgs forwards both the
+			// flag name and its value as separate codex args (it has no
+			// way to know the flag took a value).
+			name: "legacy --idle-timeout now passes through to codex",
+			args: []string{"--idle-timeout", "5m"},
+			want: Args{CodexArgs: []string{"--idle-timeout", "5m"}},
 		},
 	}
 
@@ -512,10 +495,32 @@ func TestParseArgs_ProfileEquals(t *testing.T) {
 	}
 }
 
-func TestParseArgs_Headless(t *testing.T) {
+// TestParseArgs_LegacyHeadlessPassthrough locks the breaking surface from
+// #89: the deleted --headless root flag must NOT be recognised by parseArgs;
+// it forwards to CodexArgs unchanged. Catches the regression where someone
+// re-adds the case in parseArgs without bringing back the flag.
+func TestParseArgs_LegacyHeadlessPassthrough(t *testing.T) {
 	a := mustParseArgs(t, []string{"--headless"})
-	if !a.Headless {
-		t.Error("expected Headless=true for --headless")
+	if a.Headless {
+		t.Error("Args.Headless must NOT be set by parseArgs after #89; only runServeCommand sets it")
+	}
+	if len(a.CodexArgs) != 1 || a.CodexArgs[0] != "--headless" {
+		t.Errorf("legacy --headless must pass through to CodexArgs, got %v", a.CodexArgs)
+	}
+}
+
+// TestParseArgs_LegacyIdleTimeoutPassthrough is the symmetric check for
+// the deleted --idle-timeout root flag.
+func TestParseArgs_LegacyIdleTimeoutPassthrough(t *testing.T) {
+	a := mustParseArgs(t, []string{"--idle-timeout", "5m"})
+	if a.IdleTimeout != 0 {
+		t.Errorf("Args.IdleTimeout must NOT be set by parseArgs after #89, got %v", a.IdleTimeout)
+	}
+	// The flag name and its value both fall through as positional args
+	// because parseArgs has no metadata to tell it the legacy flag took a
+	// value. Both tokens land in CodexArgs.
+	if len(a.CodexArgs) != 2 || a.CodexArgs[0] != "--idle-timeout" || a.CodexArgs[1] != "5m" {
+		t.Errorf("legacy --idle-timeout must pass through to CodexArgs, got %v", a.CodexArgs)
 	}
 }
 
@@ -533,11 +538,26 @@ func TestHandleHelp_AllFlagsPresent(t *testing.T) {
 	// Legacy hook flags (--install-hooks / --uninstall-hooks /
 	// --headless-ensure) were lifted to the `hooks` subcommand in #88; the
 	// OTEL/--print-env flags moved to `config otel`/`config show` in #87.
-	// The help text now lists `config` and `hooks` instead.
-	flags := []string{"--profile", "--model", "--upstream", "--verbose", "-v", "--log-file", "--port", "--headless", "--idle-timeout", "--no-update-check", "--version", "--help", "config", "hooks"}
+	// --headless / --idle-timeout were lifted to the `serve` subcommand in
+	// #89. The help text now lists `config`, `hooks`, and `serve` instead.
+	flags := []string{"--profile", "--model", "--upstream", "--verbose", "-v", "--log-file", "--port", "--no-update-check", "--version", "--help", "config", "hooks", "serve"}
 	for _, flag := range flags {
 		if !strings.Contains(out, flag) {
 			t.Errorf("expected help output to contain flag %q, got:\n%s", flag, out)
+		}
+	}
+}
+
+// TestHandleHelp_LegacyHeadlessFlagsAbsent locks the breaking surface
+// change from #89: --headless and --idle-timeout must NOT appear in the
+// root help text. If a future refactor re-adds them, this test fires.
+func TestHandleHelp_LegacyHeadlessFlagsAbsent(t *testing.T) {
+	out := captureStdout(func() {
+		handleHelp("")
+	})
+	for _, flag := range []string{"--headless", "--idle-timeout"} {
+		if strings.Contains(out, flag) {
+			t.Errorf("root help still mentions %q after #89 migration; users will discover the dead flag", flag)
 		}
 	}
 }
@@ -834,14 +854,7 @@ func TestRootTreeFlagsAreParseRecognised(t *testing.T) {
 	for _, f := range rootCommand.AllFlags() {
 		var args []string
 		if f.TakesArg {
-			value := "value"
-			// --idle-timeout is the only flag with strict parsing; supply
-			// a valid duration so the test exercises the case arm itself
-			// rather than the duration-parse error path.
-			if f.Name == "idle-timeout" {
-				value = "30s"
-			}
-			args = []string{"--" + f.Name, value}
+			args = []string{"--" + f.Name, "value"}
 		} else {
 			args = []string{"--" + f.Name}
 		}

@@ -60,6 +60,20 @@ func main() {
 		return
 	}
 
+	// `serve` subcommand — runs the proxy in headless mode. Consolidates the
+	// legacy --headless and --idle-timeout root flags removed in #89.
+	// Dispatched before parseArgs so the serve flag set is parsed by the
+	// serve subtree (not by the root parser, which no longer recognises
+	// --idle-timeout). The runner ends up calling runProxyMode with
+	// Headless=true — same launcher the legacy --headless path used.
+	if len(os.Args) >= 2 && os.Args[1] == "serve" {
+		if err := runServeCommand(os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, "databricks-codex:", err)
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
+
 	// update — force-check for a newer release and print instructions.
 	if len(os.Args) >= 2 && os.Args[1] == "update" {
 		if os.Getenv("DATABRICKS_NO_UPDATE_CHECK") == "1" {
@@ -103,6 +117,28 @@ func main() {
 		os.Exit(0)
 	}
 
+	runProxyMode(a)
+}
+
+// runProxyMode is the shared launcher for both the transparent-wrapper path
+// (databricks-codex with no subcommand → spawn codex as a child) and the
+// headless path (databricks-codex serve → keep the proxy alive without a
+// child). The two paths converge on the same Args struct: the serve
+// dispatcher (runServeCommand) constructs Args with Headless=true and the
+// resolved IdleTimeout, while the wrapper path leaves both at their zero
+// values.
+//
+// The Headless/IdleTimeout fields are no longer set by parseArgs (the legacy
+// --headless / --idle-timeout root flags were removed in #89); they are
+// populated only by the serve dispatcher. Treating them as Args fields keeps
+// runProxyMode's signature stable and makes the serve test surface a simple
+// "spy on the Args struct that runServeCommand constructs" check (see
+// serve_cmd_test.go).
+//
+// Exits the process directly in the codex-launch path (with codex's exit
+// code); returns normally in the headless path so the serve dispatcher's
+// caller can os.Exit(0).
+func runProxyMode(a *Args) {
 	// Default: discard all logs (silent wrapper).
 	log.SetOutput(io.Discard)
 
@@ -417,6 +453,14 @@ func runHeadless(proxyURL string, ln net.Listener, isOwner bool, refcountPath st
 // The OTEL state still drives the regular session: resolveOtel reads the
 // state file directly to decide whether to emit OTEL endpoints into the
 // proxy + config.toml.
+//
+// #89 removed the legacy --headless and --idle-timeout root flags. Their
+// effect now lives behind the `serve` subcommand. The Headless and
+// IdleTimeout fields stay on this struct because they are inputs to
+// runProxyMode — set by runServeCommand (serve_cmd.go) when the user
+// invokes `databricks-codex serve`. parseArgs never sets them; the
+// transparent-wrapper path leaves both at zero (Headless=false,
+// IdleTimeout=0) and runProxyMode skips the headless branches.
 type Args struct {
 	Verbose       bool
 	Version       bool
@@ -430,17 +474,21 @@ type Args struct {
 	Model         string
 	ModelSet      bool
 	PortFlag      int
-	Headless      bool
-	IdleTimeout   time.Duration
+	Headless      bool          // set by runServeCommand only (#89)
+	IdleTimeout   time.Duration // set by runServeCommand only (#89)
 	NoUpdateCheck bool
 	CodexArgs     []string
 }
 
-// parseArgs separates databricks-codex flags from codex flags.
+// parseArgs separates databricks-codex flags from codex flags. Recognises
+// only the root-flag set declared on rootCommand (commands.go); the legacy
+// --headless and --idle-timeout flags removed in #89 are intentionally NOT
+// recognised here — they will fall through to CodexArgs and be forwarded to
+// the wrapped codex binary, where they were never valid (codex will reject
+// them with its own error). Users should migrate to `databricks-codex serve
+// [--idle-timeout D]`.
 func parseArgs(args []string) (*Args, error) {
-	a := &Args{
-		IdleTimeout: 30 * time.Minute, // default
-	}
+	a := &Args{}
 
 	// knownFlags is defined at package level in completion_flags.go,
 	// derived from flagDefs so completions and parsing stay in sync.
@@ -540,19 +588,6 @@ func parseArgs(args []string) (*Args, error) {
 						i++
 						a.PortFlag, _ = strconv.Atoi(args[i])
 					}
-				case "--headless":
-					a.Headless = true
-				case "--idle-timeout":
-					raw := value
-					if raw == "" && i+1 < len(args) {
-						i++
-						raw = args[i]
-					}
-					d, err := time.ParseDuration(raw)
-					if err != nil {
-						return nil, fmt.Errorf("--idle-timeout: %q is not a valid duration (use e.g. 30s, 5m, 1h)", raw)
-					}
-					a.IdleTimeout = d
 				case "--no-update-check":
 					a.NoUpdateCheck = true
 				default:
@@ -597,9 +632,7 @@ Databricks-Codex Flags:
   --tls-cert string         Path to TLS certificate file (requires --tls-key)
   --tls-key string          Path to TLS private key file (requires --tls-cert)
   --port int                Fixed proxy port (default: 49154, saved to state)
-  --headless                Start proxy without launching codex (for IDE extensions)
-  --idle-timeout duration   Idle timeout for headless mode (default 30m, 0 disables)
-  --no-update-check            Skip the automatic update check on startup
+  --no-update-check         Skip the automatic update check on startup
   --version             Print version and exit
   --help, -h            Show this help message
 
@@ -608,6 +641,7 @@ Subcommands:
   completion <shell>           Generate shell completions (bash, zsh, fish)
   update                       Check for a newer release and print upgrade instructions
   hooks <subcommand>           Install/uninstall SessionStart hooks (install, uninstall, session-start)
+  serve [flags]                Run the proxy in headless mode (consolidates the deleted root flags)
 
 ────────────────────────────────────────────────────────────────────────────────
 Codex CLI Options:

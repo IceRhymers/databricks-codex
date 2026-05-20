@@ -93,11 +93,10 @@ databricks-codex --upstream https://adb-123456789.azuredatabricks.net/ai-gateway
 | `--proxy-api-key` | disabled | Require this API key on all local proxy requests |
 | `--tls-cert` | | TLS certificate file for the local proxy (requires `--tls-key`) |
 | `--tls-key` | | TLS private key file for the local proxy (requires `--tls-cert`) |
-| `--headless` | `false` | Start proxy without launching codex (for IDE extensions or hooks) |
-| `--idle-timeout` | `30m` | Idle timeout for headless mode (`0` disables; bare number = minutes) |
 | `--version` | | Print version and exit |
 | `--help`, `-h` | | Print wrapper flags and the full `codex --help` output, then exit |
 
+Headless / idle-timeout knobs live under `databricks-codex serve` (see [`serve` Subcommand](#serve-subcommand)).
 Hook installation lives under `databricks-codex hooks` (see [`hooks` Subcommand](#hooks-subcommand)).
 
 All other flags and args are forwarded to `codex`.
@@ -107,6 +106,13 @@ All other flags and args are forwarded to `codex`.
 > `--otel-logs-table`, and `--print-env` are gone. They moved under
 > `databricks-codex config` — see the [config Subcommand](#config-subcommand)
 > section below.
+
+> **Breaking in v0.13.0:** the session-mode root flags `--headless` and
+> `--idle-timeout` are gone. They moved under `databricks-codex serve` —
+> see the [serve Subcommand](#serve-subcommand) section below. The
+> SessionStart hook installed by `databricks-codex hooks install`
+> continues to work transparently — it spawns `databricks-codex serve`
+> internally now.
 
 ## config Subcommand
 
@@ -191,9 +197,47 @@ This lets the wrapper:
 
 `databricks-codex --help` (or `-h`) prints the wrapper's own flags followed by the complete `codex --help` output.
 
+## serve Subcommand
+
+`databricks-codex serve` runs the proxy in headless mode without launching `codex`. Useful when an IDE extension or other tool needs the proxy up but doesn't want a child `codex` process. Replaces the legacy root flags `--headless` and `--idle-timeout`, which were removed in v0.13.
+
+| Flag | Default | Description |
+| --- | --- | --- |
+| `--idle-timeout` | `30m` | Shut the proxy down after this much idle time. `0` disables (long-running IDE sessions). Accepts Go duration strings: `30s`, `5m`, `1h`, `2h30m`. Bare integers (e.g. `30`) are rejected. |
+| `--profile` | state file > `DEFAULT` | Databricks CLI profile. |
+| `--port` | state file > `49154` | Proxy listen port. |
+| `--model` | saved | Model name (saved to state file when supplied). |
+| `--upstream` | auto-discovered | Override the AI Gateway URL. |
+| `--log-file` | | Write debug logs to this file (combinable with `--verbose`). |
+| `--verbose`, `-v` | `false` | Enable debug logging to stderr. |
+| `--proxy-api-key` | disabled | Require this API key on all proxy requests. |
+| `--tls-cert` | | TLS certificate file (requires `--tls-key`). |
+| `--tls-key` | | TLS private key file (requires `--tls-cert`). |
+| `--no-update-check` | | Skip the automatic update check on startup. |
+| `--help`, `-h` | | Show help and exit. |
+
+The proxy prints `PROXY_URL=http://127.0.0.1:<port>` (or `https://...` with TLS) to stdout once bound. It exits when:
+
+- `SIGINT` or `SIGTERM` is received.
+- `POST /shutdown` is hit on the proxy URL.
+- `--idle-timeout` elapses with zero in-flight requests.
+
+```bash
+# Default 30-minute idle timeout:
+databricks-codex serve
+
+# Tight timeout for tests / CI:
+databricks-codex serve --idle-timeout 5m
+
+# Disable idle shutdown for a long-running IDE session:
+databricks-codex serve --idle-timeout 0
+```
+
+The SessionStart hook installed by `databricks-codex hooks install` spawns `databricks-codex serve` under the hood — you don't need to invoke this manually for the hooks path.
+
 ## `hooks` Subcommand
 
-Install hooks so every Codex session auto-starts the proxy on startup — no manual `--headless` needed. Replaces the legacy root flags (`--install-hooks` / `--uninstall-hooks` / `--headless-ensure`), which were removed in v0.12.
+Install hooks so every Codex session auto-starts the proxy on startup — no manual `databricks-codex serve` needed. Replaces the legacy root flags (`--install-hooks` / `--uninstall-hooks` / `--headless-ensure`), which were removed in v0.12.
 
 > **First-time setup:** Run `databricks-codex` at least once before installing hooks. This writes `~/.codex/config.toml` so the proxy is used for all Codex sessions.
 
@@ -215,7 +259,7 @@ This merges a **SessionStart** hook into `~/.codex/hooks.json` and enables the `
 
 ### Shutdown
 
-Unlike Claude Code, the Codex CLI does not have a `SessionEnd` hook event. The proxy shuts itself down automatically after **30 minutes of inactivity** (configurable via `--idle-timeout`). You can also stop it manually with `POST /shutdown` or by sending a signal to the process.
+Unlike Claude Code, the Codex CLI does not have a `SessionEnd` hook event. The proxy shuts itself down automatically after **30 minutes of inactivity** (configurable via `databricks-codex serve --idle-timeout <dur>` for direct invocations; the SessionStart hook spawns the proxy with the default 30-minute timeout). You can also stop it manually with `POST /shutdown` or by sending a signal to the process.
 
 ### Uninstall
 

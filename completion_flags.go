@@ -6,10 +6,13 @@ import "github.com/IceRhymers/databricks-claude/pkg/completion"
 // shell-script generation. Order is curated here (not implied by the tree)
 // because bash/zsh/fish completion output is order-sensitive — preserving
 // byte-equivalence with the pre-tree binary requires the original ordering
-// (--profile first, --port between --tls-key and --headless, etc.). Each
-// entry is derived from rootCommand so the tree remains the single source
-// of truth for which flags exist and what their descriptions / completers /
-// arg semantics are.
+// (--profile first, --port toward the end). Each entry is derived from
+// rootCommand so the tree remains the single source of truth for which
+// flags exist and what their descriptions / completers / arg semantics are.
+// #89 removed --headless and --idle-timeout from this slice (alongside the
+// rootCommand.Flags removal); they live on serveCommand now and are
+// reachable via the recursive subcommand-tree wiring in
+// rootCommand.CompletionSubcommands().
 //
 // Adding a new root flag requires:
 //  1. Append a FlagDef to rootCommand.Flags (or .Persistent) in commands.go.
@@ -34,8 +37,6 @@ var flagDefs = func() []completion.FlagDef {
 		"tls-cert",
 		"tls-key",
 		"port",
-		"headless",
-		"idle-timeout",
 		"no-update-check",
 	}
 	byName := map[string]completion.FlagDef{}
@@ -61,10 +62,12 @@ var knownFlags = rootCommand.KnownFlags()
 
 // knownSubcommands is the recursive shell-completion subcommand tree fed
 // to pkg/completion so `databricks-codex <TAB>` offers completion / update
-// / config / hooks, and `databricks-codex hooks <TAB>` offers install /
-// uninstall / session-start, `databricks-codex config <TAB>` offers otel
-// / show, etc. #87 introduced this wire-up alongside the dep bump to
-// databricks-claude v1.0.2 (which exports SubcommandDef); #88 adds the
-// hooks branch. See the doc-comment in internal/cmd/cmd.go for the prior
-// #86 omission.
+// / config / hooks / serve, and `databricks-codex hooks <TAB>` offers
+// install / uninstall / session-start, `databricks-codex config <TAB>`
+// offers otel / show, etc. #87 introduced this wire-up alongside the dep
+// bump to databricks-claude v1.0.2 (which exports SubcommandDef); #88
+// adds the hooks branch; #89 adds the serve leaf — picked up
+// automatically by the recursive walk now that serveCommand sits on
+// rootCommand.Subcommands. See the doc-comment in internal/cmd/cmd.go
+// for the prior #86 omission.
 var knownSubcommands = rootCommand.CompletionSubcommands()
