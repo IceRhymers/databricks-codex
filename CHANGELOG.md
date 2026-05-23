@@ -1,5 +1,30 @@
 # Changelog
 
+## [1.0.0](https://github.com/IceRhymers/databricks-codex/compare/v0.11.0...v1.0.0) (2026-05-23)
+
+
+### ⚠ BREAKING CHANGES
+
+* serve subcommand (consolidate --headless / --idle-timeout) ([#89](https://github.com/IceRhymers/databricks-codex/issues/89))
+* legacy root flags removed:
+    - --otel, --no-otel, --no-otel-metrics, --no-otel-logs
+    - --otel-metrics-table, --otel-logs-table
+    - --print-env
+* legacy root flags removed:
+    - --install-hooks → hooks install
+    - --uninstall-hooks → hooks uninstall
+    - --headless-ensure → hooks session-start
+
+### Features
+
+* CLI command-tree restructure (integration branch) ([a612727](https://github.com/IceRhymers/databricks-codex/commit/a612727f422a2325eace1c61b3f047a75b0dfb4d))
+* command-tree registry foundation ([#86](https://github.com/IceRhymers/databricks-codex/issues/86)) ([e6838d2](https://github.com/IceRhymers/databricks-codex/commit/e6838d2264be2200cb11ed4d2bd0fdf8d7871d74))
+* config subcommand (otel enable/disable, show) ([#87](https://github.com/IceRhymers/databricks-codex/issues/87)) ([a281dd4](https://github.com/IceRhymers/databricks-codex/commit/a281dd4917fccc92f82bde002b46d15566f9db8c))
+* hooks subcommand (install/uninstall/session-start) ([#88](https://github.com/IceRhymers/databricks-codex/issues/88)) ([1586a9b](https://github.com/IceRhymers/databricks-codex/commit/1586a9b493e54b07155c0f867c701011315b2d13))
+* serve subcommand (consolidate --headless / --idle-timeout) ([#89](https://github.com/IceRhymers/databricks-codex/issues/89)) ([d8b5ef7](https://github.com/IceRhymers/databricks-codex/commit/d8b5ef7ad625f674699ad98c499592e5829d68a9))
+* stop appending codex --help, document -- passthrough ([0030b34](https://github.com/IceRhymers/databricks-codex/commit/0030b340a2b866e0597f049920d36dbde5e07486))
+* stop appending codex --help, document -- passthrough ([#95](https://github.com/IceRhymers/databricks-codex/issues/95)) ([f08bd82](https://github.com/IceRhymers/databricks-codex/commit/f08bd82c4cbcd4e0884c90a4af9ee3e0e5deff84))
+
 ## [0.11.0](https://github.com/IceRhymers/databricks-codex/compare/v0.10.0...v0.11.0) (2026-05-11)
 
 
