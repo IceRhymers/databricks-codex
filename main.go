@@ -33,7 +33,44 @@ func main() {
 	// completion <shell> — must be the very first check, before any flag parsing,
 	// auth, or state loading. Safe to call in the Homebrew install sandbox.
 	if len(os.Args) >= 2 && os.Args[1] == "completion" {
-		completion.Run(os.Args[2:], flagDefs, "databricks-codex")
+		completion.Run(os.Args[2:], flagDefs, "databricks-codex", knownSubcommands...)
+		os.Exit(0)
+	}
+
+	// hooks <subcommand> — handled before auth/state setup since
+	// session-start is hot-path (called by every codex SessionStart) and
+	// install/uninstall must work in environments where the proxy is not
+	// yet configured. The dispatcher in hooks_cmd.go owns flag parsing.
+	if len(os.Args) >= 2 && os.Args[1] == "hooks" {
+		if err := runHooksCommand(os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, "databricks-codex:", err)
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
+
+	// `config` subcommand — persistent config editor (OTEL signals,
+	// resolved-config diagnostic). Consolidates the 7 flags removed from the
+	// root in #87 — the flags that mutate state for FUTURE runs rather than
+	// affecting the current invocation. The transparent-proxy launcher path
+	// below is intentionally flag-driven and bare; persistent state mutation
+	// lives behind this tree.
+	if len(os.Args) >= 2 && os.Args[1] == "config" {
+		runConfigCommand(os.Args[2:])
+		return
+	}
+
+	// `serve` subcommand — runs the proxy in headless mode. Consolidates the
+	// legacy --headless and --idle-timeout root flags removed in #89.
+	// Dispatched before parseArgs so the serve flag set is parsed by the
+	// serve subtree (not by the root parser, which no longer recognises
+	// --idle-timeout). The runner ends up calling runProxyMode with
+	// Headless=true — same launcher the legacy --headless path used.
+	if len(os.Args) >= 2 && os.Args[1] == "serve" {
+		if err := runServeCommand(os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, "databricks-codex:", err)
+			os.Exit(1)
+		}
 		os.Exit(0)
 	}
 
@@ -80,37 +117,28 @@ func main() {
 		os.Exit(0)
 	}
 
-	// --- Hook lifecycle commands (handled before auth/config setup) ---
-	if a.InstallHooksFlag || a.UninstallHooksFlag {
-		homeDir, err := os.UserHomeDir()
-		if err != nil {
-			log.Fatalf("databricks-codex: cannot determine home dir: %v", err)
-		}
-		hp := filepath.Join(homeDir, ".codex", "hooks.json")
-		if a.InstallHooksFlag {
-			if err := installHooks(hp); err != nil {
-				log.Fatalf("databricks-codex: --install-hooks: %v", err)
-			}
-			fmt.Fprintln(os.Stderr, "databricks-codex: hooks installed — SessionStart hook added to ~/.codex/hooks.json")
-		} else {
-			if err := uninstallHooks(hp); err != nil {
-				log.Fatalf("databricks-codex: --uninstall-hooks: %v", err)
-			}
-			fmt.Fprintln(os.Stderr, "databricks-codex: hooks removed from ~/.codex/hooks.json")
-		}
-		os.Exit(0)
-	}
+	runProxyMode(a)
+}
 
-	// --- Headless hook command (called by installed hooks, not by end users) ---
-	if a.HeadlessEnsureFlag {
-		state := loadState()
-		port := resolvePort(a.PortFlag, state)
-		if err := headlessEnsure(port); err != nil {
-			log.Fatalf("databricks-codex: headless ensure failed: %v", err)
-		}
-		os.Exit(0)
-	}
-
+// runProxyMode is the shared launcher for both the transparent-wrapper path
+// (databricks-codex with no subcommand → spawn codex as a child) and the
+// headless path (databricks-codex serve → keep the proxy alive without a
+// child). The two paths converge on the same Args struct: the serve
+// dispatcher (runServeCommand) constructs Args with Headless=true and the
+// resolved IdleTimeout, while the wrapper path leaves both at their zero
+// values.
+//
+// The Headless/IdleTimeout fields are no longer set by parseArgs (the legacy
+// --headless / --idle-timeout root flags were removed in #89); they are
+// populated only by the serve dispatcher. Treating them as Args fields keeps
+// runProxyMode's signature stable and makes the serve test surface a simple
+// "spy on the Args struct that runServeCommand constructs" check (see
+// serve_cmd_test.go).
+//
+// Exits the process directly in the codex-launch path (with codex's exit
+// code); returns normally in the headless path so the serve dispatcher's
+// caller can os.Exit(0).
+func runProxyMode(a *Args) {
 	// Default: discard all logs (silent wrapper).
 	log.SetOutput(io.Discard)
 
@@ -207,8 +235,7 @@ func main() {
 
 	// --- Seed token cache ---
 	tp := NewTokenProvider("", profile)
-	initialToken, err := tp.Token(context.Background())
-	if err != nil {
+	if _, err := tp.Token(context.Background()); err != nil {
 		log.Fatalf("databricks-codex: failed to fetch initial token: %v", err)
 	}
 
@@ -226,41 +253,18 @@ func main() {
 	log.Printf("databricks-codex: gateway URL: %s", gatewayURL)
 
 	// --- OTEL tables ---
-	// Compute the final (otel, metricsTable, logsTable) tuple from flags + state.
-	// Saved state is read once and passed in so the helper is pure & testable.
+	// Compute the final (otel, metricsTable, logsTable) tuple from saved
+	// state. With #87, the persistent-config editor (`databricks-codex config
+	// otel enable/disable`) is the only path that mutates these — the
+	// regular session flow is read-only.
 	saved := loadState()
-	otel, otelMetricsTable, otelLogsTable := resolveOtel(a, saved)
+	otel, otelMetricsTable, otelLogsTable := resolveOtel(saved)
 
-	// Log informational lines and persist any explicit table flags.
-	if !a.OtelMetricsTableSet && otelMetricsTable != "" && otelMetricsTable != "main.codex_telemetry.codex_otel_metrics" {
+	if otelMetricsTable != "" {
 		log.Printf("databricks-codex: using saved otel-metrics-table: %s", otelMetricsTable)
 	}
-	if a.OtelMetricsTableSet {
-		s := loadState()
-		s.OtelMetricsTable = otelMetricsTable
-		if err := saveState(s); err != nil {
-			log.Printf("databricks-codex: failed to save otel-metrics-table: %v", err)
-		} else {
-			log.Printf("databricks-codex: saved otel-metrics-table %q for future sessions", otelMetricsTable)
-		}
-	}
-	if !a.OtelLogsTableSet && otelLogsTable != "" && otelLogsTable != "main.codex_telemetry.codex_otel_logs" {
+	if otelLogsTable != "" {
 		log.Printf("databricks-codex: using saved otel-logs-table: %s", otelLogsTable)
-	}
-	if a.OtelLogsTableSet {
-		s := loadState()
-		s.OtelLogsTable = otelLogsTable
-		if err := saveState(s); err != nil {
-			log.Printf("databricks-codex: failed to save otel-logs-table: %v", err)
-		} else {
-			log.Printf("databricks-codex: saved otel-logs-table %q for future sessions", otelLogsTable)
-		}
-	}
-
-	// --- Print env and exit if requested ---
-	if a.PrintEnv {
-		handlePrintEnv(host, gatewayURL, initialToken, profile, model, otelMetricsTable, otelLogsTable)
-		os.Exit(0)
 	}
 
 	// Verify codex is on PATH before starting proxy (skip in headless mode).
@@ -441,42 +445,50 @@ func runHeadless(proxyURL string, ln net.Listener, isOwner bool, refcountPath st
 }
 
 // Args holds all parsed databricks-codex flags plus the residual codex args.
+//
+// #87 removed the persistent-config root flags (--otel, --no-otel*,
+// --otel-*-table, --print-env). They live under `databricks-codex config
+// otel {enable|disable}` and `databricks-codex config show` now and have no
+// session-only counterparts — the persistent-config editor IS the surface.
+// The OTEL state still drives the regular session: resolveOtel reads the
+// state file directly to decide whether to emit OTEL endpoints into the
+// proxy + config.toml.
+//
+// #89 removed the legacy --headless and --idle-timeout root flags. Their
+// effect now lives behind the `serve` subcommand. The Headless and
+// IdleTimeout fields stay on this struct because they are inputs to
+// runProxyMode — set by runServeCommand (serve_cmd.go) when the user
+// invokes `databricks-codex serve`. parseArgs never sets them; the
+// transparent-wrapper path leaves both at zero (Headless=false,
+// IdleTimeout=0) and runProxyMode skips the headless branches.
 type Args struct {
-	Verbose             bool
-	Version             bool
-	ShowHelp            bool
-	PrintEnv            bool
-	NoOtel              bool
-	NoOtelMetrics       bool
-	NoOtelLogs          bool
-	OtelLogsTable       string
-	OtelLogsTableSet    bool
-	OtelMetricsTable    string
-	OtelMetricsTableSet bool
-	Upstream            string
-	LogFile             string
-	Profile             string
-	Otel                bool
-	ProxyAPIKey         string
-	TLSCert             string
-	TLSKey              string
-	Model               string
-	ModelSet            bool
-	PortFlag            int
-	Headless            bool
-	IdleTimeout         time.Duration
-	InstallHooksFlag    bool
-	UninstallHooksFlag  bool
-	HeadlessEnsureFlag  bool
-	NoUpdateCheck       bool
-	CodexArgs           []string
+	Verbose       bool
+	Version       bool
+	ShowHelp      bool
+	Upstream      string
+	LogFile       string
+	Profile       string
+	ProxyAPIKey   string
+	TLSCert       string
+	TLSKey        string
+	Model         string
+	ModelSet      bool
+	PortFlag      int
+	Headless      bool          // set by runServeCommand only (#89)
+	IdleTimeout   time.Duration // set by runServeCommand only (#89)
+	NoUpdateCheck bool
+	CodexArgs     []string
 }
 
-// parseArgs separates databricks-codex flags from codex flags.
+// parseArgs separates databricks-codex flags from codex flags. Recognises
+// only the root-flag set declared on rootCommand (commands.go); the legacy
+// --headless and --idle-timeout flags removed in #89 are intentionally NOT
+// recognised here — they will fall through to CodexArgs and be forwarded to
+// the wrapped codex binary, where they were never valid (codex will reject
+// them with its own error). Users should migrate to `databricks-codex serve
+// [--idle-timeout D]`.
 func parseArgs(args []string) (*Args, error) {
-	a := &Args{
-		IdleTimeout: 30 * time.Minute, // default
-	}
+	a := &Args{}
 
 	// knownFlags is defined at package level in completion_flags.go,
 	// derived from flagDefs so completions and parsing stay in sync.
@@ -512,24 +524,6 @@ func parseArgs(args []string) (*Args, error) {
 
 			if knownFlags[name] {
 				switch name {
-				case "--otel-logs-table":
-					if value != "" {
-						a.OtelLogsTable = value
-						a.OtelLogsTableSet = true
-					} else if i+1 < len(args) {
-						i++
-						a.OtelLogsTable = args[i]
-						a.OtelLogsTableSet = true
-					}
-				case "--otel-metrics-table":
-					if value != "" {
-						a.OtelMetricsTable = value
-						a.OtelMetricsTableSet = true
-					} else if i+1 < len(args) {
-						i++
-						a.OtelMetricsTable = args[i]
-						a.OtelMetricsTableSet = true
-					}
 				case "--upstream":
 					if value != "" {
 						a.Upstream = value
@@ -587,16 +581,6 @@ func parseArgs(args []string) (*Args, error) {
 					a.Version = true
 				case "--help":
 					a.ShowHelp = true
-				case "--print-env":
-					a.PrintEnv = true
-				case "--otel":
-					a.Otel = true
-				case "--no-otel":
-					a.NoOtel = true
-				case "--no-otel-metrics":
-					a.NoOtelMetrics = true
-				case "--no-otel-logs":
-					a.NoOtelLogs = true
 				case "--port":
 					if value != "" {
 						a.PortFlag, _ = strconv.Atoi(value)
@@ -604,27 +588,17 @@ func parseArgs(args []string) (*Args, error) {
 						i++
 						a.PortFlag, _ = strconv.Atoi(args[i])
 					}
-				case "--headless":
-					a.Headless = true
-				case "--idle-timeout":
-					raw := value
-					if raw == "" && i+1 < len(args) {
-						i++
-						raw = args[i]
-					}
-					d, err := time.ParseDuration(raw)
-					if err != nil {
-						return nil, fmt.Errorf("--idle-timeout: %q is not a valid duration (use e.g. 30s, 5m, 1h)", raw)
-					}
-					a.IdleTimeout = d
-				case "--install-hooks":
-					a.InstallHooksFlag = true
-				case "--uninstall-hooks":
-					a.UninstallHooksFlag = true
-				case "--headless-ensure":
-					a.HeadlessEnsureFlag = true
 				case "--no-update-check":
 					a.NoUpdateCheck = true
+				default:
+					// A name in knownFlags must have a corresponding case
+					// above; this arm catches the case where rootCommand
+					// declares a new flag but parseArgs hasn't been updated.
+					// Loud failure beats silent passthrough — the bidirectional
+					// parity test in main_test.go also detects this drift,
+					// but a runtime check catches it for any caller path the
+					// test doesn't exercise.
+					return nil, fmt.Errorf("internal: %s is a known flag but parseArgs has no case for it", name)
 				}
 				i++
 				continue
@@ -652,31 +626,22 @@ Databricks-Codex Flags:
   --profile string      Databricks CLI profile (saved for future sessions; default: env or "DEFAULT")
   --model string        Model name (saved for future sessions; default: "databricks-gpt-5-5")
   --upstream string     Override the AI Gateway URL (default: auto-discovered)
-  --print-env           Print resolved configuration and exit (token redacted)
   --verbose, -v         Enable debug logging to stderr
   --log-file string     Write debug logs to a file (combinable with --verbose)
-  --otel                       Enable OpenTelemetry export (metrics + logs)
-  --no-otel                    Disable OpenTelemetry for this session (saved tables preserved)
-  --otel-metrics-table string  Unity Catalog table for OTEL metrics (saved; default: main.codex_telemetry.codex_otel_metrics when --otel is set)
-  --otel-logs-table string     Unity Catalog table for OTEL logs (saved; derived from metrics table when omitted)
-  --no-otel-metrics            Disable metrics for this session (saved table preserved)
-  --no-otel-logs               Disable logs for this session (saved table preserved)
   --proxy-api-key string    Require this API key on all proxy requests (default: disabled)
   --tls-cert string         Path to TLS certificate file (requires --tls-key)
   --tls-key string          Path to TLS private key file (requires --tls-cert)
   --port int                Fixed proxy port (default: 49154, saved to state)
-  --headless                Start proxy without launching codex (for IDE extensions)
-  --headless-ensure         Start proxy if not running (called by SessionStart hook)
-  --idle-timeout duration   Idle timeout for headless mode (default 30m, 0 disables)
-  --install-hooks           Install SessionStart hook into ~/.codex/hooks.json
-  --uninstall-hooks         Remove databricks-codex hooks from ~/.codex/hooks.json
-  --no-update-check            Skip the automatic update check on startup
+  --no-update-check         Skip the automatic update check on startup
   --version             Print version and exit
   --help, -h            Show this help message
 
 Subcommands:
+  config                       Persistent config editor (otel enable/disable, show)
   completion <shell>           Generate shell completions (bash, zsh, fish)
   update                       Check for a newer release and print upgrade instructions
+  hooks <subcommand>           Install/uninstall SessionStart hooks (install, uninstall, session-start)
+  serve [flags]                Run the proxy in headless mode (consolidates the deleted root flags)
 
 ────────────────────────────────────────────────────────────────────────────────
 Codex CLI Options:
@@ -779,77 +744,37 @@ func resolveProfile(flagValue string, savedValue string) string {
 	return "DEFAULT"
 }
 
-// resolveOtel is the orchestration: given parsed flags + saved state, decide
-// whether OTel is on for this session and which (metrics, logs) tables to use.
+// resolveOtel reads the persistent state and returns the (otel, metrics,
+// logs) tuple the regular session path uses to drive proxy + config.toml
+// patching. Pure function over state — no flag input — because #87 removed
+// the session-time OTEL flags. The persistent-config editor
+// (`databricks-codex config otel enable/disable`) is the only writer; the
+// session is a read-only consumer.
 //
-// Semantics mirror databricks-claude:
+// Semantics:
 //
-//	OTel is "on" if any of: --otel, --otel-metrics-table, --otel-logs-table,
-//	or saved state has any table set — UNLESS --no-otel was passed, which
-//	is the unconditional kill switch.
-//
-//	--no-otel-metrics / --no-otel-logs disable that specific signal for the
-//	current session but leave OTel itself on (so the other signal keeps
-//	exporting) and leave the saved table preference intact.
-//
-// Both returned table strings are empty when their signal is disabled.
-func resolveOtel(a *Args, saved persistentState) (otel bool, metricsTable string, logsTable string) {
-	otel = a.Otel
-	if !otel && !a.NoOtel {
-		if a.OtelMetricsTableSet || a.OtelLogsTableSet || saved.OtelMetricsTable != "" || saved.OtelLogsTable != "" {
-			otel = true
-		}
+//   - A signal is on iff the corresponding *Disabled bit is unset AND the
+//     corresponding table name is non-empty in state.
+//   - Returned table strings are empty when their signal is off (so the
+//     proxy's tomlconfig.Patch removes the [otel] section when both are
+//     empty rather than leaving stale exporter lines).
+//   - OTel as a whole is on iff at least one signal is on.
+func resolveOtel(saved persistentState) (otel bool, metricsTable string, logsTable string) {
+	if !saved.OtelMetricsDisabled && saved.OtelMetricsTable != "" {
+		metricsTable = saved.OtelMetricsTable
 	}
-	if a.NoOtel {
-		otel = false
+	if !saved.OtelLogsDisabled && saved.OtelLogsTable != "" {
+		logsTable = saved.OtelLogsTable
 	}
-
-	if !a.NoOtelMetrics {
-		metricsTable = resolveOtelMetricsTable(a.OtelMetricsTable, a.OtelMetricsTableSet, saved.OtelMetricsTable, otel)
-	}
-	if !a.NoOtelLogs {
-		logsTable = resolveOtelLogsTable(a.OtelLogsTable, a.OtelLogsTableSet, saved.OtelLogsTable, metricsTable, otel)
-	}
+	otel = metricsTable != "" || logsTable != ""
 	return otel, metricsTable, logsTable
-}
-
-// resolveOtelLogsTable returns the OTEL logs table using the resolution chain:
-// explicit flag → saved state → derive-from-metrics-table → default.
-// Returns empty string when otel is disabled.
-func resolveOtelLogsTable(flagValue string, flagSet bool, savedValue string, metricsTable string, otel bool) string {
-	if !otel {
-		return ""
-	}
-	if flagSet && flagValue != "" {
-		return flagValue
-	}
-	if savedValue != "" {
-		return savedValue
-	}
-	if metricsTable != "" {
-		return deriveLogsTable(metricsTable)
-	}
-	return "main.codex_telemetry.codex_otel_logs"
-}
-
-// resolveOtelMetricsTable returns the OTEL metrics table using the resolution chain:
-// explicit flag → saved state → default. Returns empty string when otel is disabled.
-func resolveOtelMetricsTable(flagValue string, flagSet bool, savedValue string, otel bool) string {
-	if !otel {
-		return ""
-	}
-	if flagSet && flagValue != "" {
-		return flagValue
-	}
-	if savedValue != "" {
-		return savedValue
-	}
-	return "main.codex_telemetry.codex_otel_metrics"
 }
 
 // deriveLogsTable derives the OTEL logs table name from a metrics table name.
 // If the metrics table ends with "_otel_metrics", replace that suffix with "_otel_logs".
-// Otherwise append "_otel_logs". Ported from databricks-claude/main.go.
+// Otherwise append "_otel_logs". Ported from databricks-claude/main.go and
+// kept exported (within-package) so cli_config.go's resolver can reuse it
+// for the `config otel enable --metrics-table` derivation.
 func deriveLogsTable(metricsTable string) string {
 	if metricsTable == "" {
 		return ""

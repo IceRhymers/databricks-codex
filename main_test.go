@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 )
 
 // mustParseArgs is a test helper that calls parseArgs and fails the test on error.
@@ -22,6 +21,20 @@ func mustParseArgs(t *testing.T, args []string) *Args {
 	return a
 }
 
+// equalStringSlice reports whether a and b have the same length and same
+// elements in order. nil and empty slices are treated equal.
+func equalStringSlice(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
 // --- parseArgs tests ---
 
 func TestParseArgs_HelpLong(t *testing.T) {
@@ -29,7 +42,7 @@ func TestParseArgs_HelpLong(t *testing.T) {
 	if !a.ShowHelp {
 		t.Error("expected ShowHelp=true for --help")
 	}
-	if a.Verbose || a.Version || a.PrintEnv || a.NoOtel || a.Otel || a.Upstream != "" || a.LogFile != "" || a.Profile != "" || len(a.CodexArgs) != 0 {
+	if a.Verbose || a.Version || a.Upstream != "" || a.LogFile != "" || a.Profile != "" || len(a.CodexArgs) != 0 {
 		t.Error("unexpected non-default values alongside --help")
 	}
 }
@@ -38,13 +51,6 @@ func TestParseArgs_HelpShort(t *testing.T) {
 	a := mustParseArgs(t, []string{"-h"})
 	if !a.ShowHelp {
 		t.Error("expected ShowHelp=true for -h")
-	}
-}
-
-func TestParseArgs_PrintEnv(t *testing.T) {
-	a := mustParseArgs(t, []string{"--print-env"})
-	if !a.PrintEnv {
-		t.Error("expected PrintEnv=true for --print-env")
 	}
 }
 
@@ -97,73 +103,9 @@ func TestParseArgs_UpstreamEquals(t *testing.T) {
 	}
 }
 
-func TestParseArgs_NoOtel(t *testing.T) {
-	a := mustParseArgs(t, []string{"--no-otel"})
-	if !a.NoOtel {
-		t.Error("expected NoOtel=true for --no-otel")
-	}
-	if len(a.CodexArgs) != 0 {
-		t.Errorf("expected no CodexArgs, got %v", a.CodexArgs)
-	}
-}
-
-func TestParseArgs_OtelLogsTable(t *testing.T) {
-	a := mustParseArgs(t, []string{"--otel-logs-table", "main.custom.logs"})
-	if !a.OtelLogsTableSet {
-		t.Error("expected OtelLogsTableSet=true when --otel-logs-table is passed")
-	}
-	if a.OtelLogsTable != "main.custom.logs" {
-		t.Errorf("expected OtelLogsTable=%q, got %q", "main.custom.logs", a.OtelLogsTable)
-	}
-}
-
-func TestParseArgs_OtelLogsTableDefault(t *testing.T) {
-	a := mustParseArgs(t, []string{})
-	if a.OtelLogsTableSet {
-		t.Error("expected OtelLogsTableSet=false when --otel-logs-table is not passed")
-	}
-	_ = a.OtelLogsTable
-}
-
-func TestParseArgs_OtelMetricsTable(t *testing.T) {
-	a := mustParseArgs(t, []string{"--otel-metrics-table", "main.custom.metrics"})
-	if !a.OtelMetricsTableSet {
-		t.Error("expected OtelMetricsTableSet=true when --otel-metrics-table is passed")
-	}
-	if a.OtelMetricsTable != "main.custom.metrics" {
-		t.Errorf("expected OtelMetricsTable=%q, got %q", "main.custom.metrics", a.OtelMetricsTable)
-	}
-}
-
-func TestParseArgs_OtelMetricsTableEquals(t *testing.T) {
-	a := mustParseArgs(t, []string{"--otel-metrics-table=cat.schema.tbl"})
-	if !a.OtelMetricsTableSet {
-		t.Error("expected OtelMetricsTableSet=true for --otel-metrics-table=value form")
-	}
-	if a.OtelMetricsTable != "cat.schema.tbl" {
-		t.Errorf("expected OtelMetricsTable=%q, got %q", "cat.schema.tbl", a.OtelMetricsTable)
-	}
-}
-
-func TestParseArgs_NoOtelMetrics(t *testing.T) {
-	a := mustParseArgs(t, []string{"--no-otel-metrics"})
-	if !a.NoOtelMetrics {
-		t.Error("expected NoOtelMetrics=true for --no-otel-metrics")
-	}
-	if a.NoOtelLogs || a.NoOtel {
-		t.Error("--no-otel-metrics should not set NoOtelLogs or NoOtel")
-	}
-}
-
-func TestParseArgs_NoOtelLogs(t *testing.T) {
-	a := mustParseArgs(t, []string{"--no-otel-logs"})
-	if !a.NoOtelLogs {
-		t.Error("expected NoOtelLogs=true for --no-otel-logs")
-	}
-	if a.NoOtelMetrics || a.NoOtel {
-		t.Error("--no-otel-logs should not set NoOtelMetrics or NoOtel")
-	}
-}
+// #87 removed --no-otel*/--otel-*-table; coverage moved to TestResolveConfigOTEL_*
+// (state-driven resolver) and TestRootTreeFlagsAreParseRecognised (shrink-side
+// of the bidirectional parity check).
 
 func TestParseArgs_UnknownFlagPassthrough(t *testing.T) {
 	a := mustParseArgs(t, []string{"--unknown"})
@@ -174,7 +116,7 @@ func TestParseArgs_UnknownFlagPassthrough(t *testing.T) {
 
 func TestParseArgs_EmptyArgs(t *testing.T) {
 	a := mustParseArgs(t, []string{})
-	if a.Verbose || a.Version || a.ShowHelp || a.PrintEnv || a.NoOtel || a.Otel {
+	if a.Verbose || a.Version || a.ShowHelp {
 		t.Error("expected all bool flags false for empty args")
 	}
 	if a.Upstream != "" {
@@ -189,8 +131,15 @@ func TestParseArgs_EmptyArgs(t *testing.T) {
 	if len(a.CodexArgs) != 0 {
 		t.Errorf("expected no CodexArgs, got %v", a.CodexArgs)
 	}
-	if a.IdleTimeout != 30*time.Minute {
-		t.Errorf("expected default IdleTimeout=30m, got %v", a.IdleTimeout)
+	// #89 removed the --idle-timeout root flag; parseArgs no longer
+	// initialises Args.IdleTimeout. The default 30m default is now
+	// applied by buildServeArgs (serve_cmd.go); see
+	// TestBuildServeArgs_DefaultIdleTimeout.
+	if a.IdleTimeout != 0 {
+		t.Errorf("expected zero IdleTimeout from parseArgs (no longer parsed), got %v", a.IdleTimeout)
+	}
+	if a.Headless {
+		t.Error("expected Headless=false from parseArgs (no longer parsed; set only by runServeCommand)")
 	}
 }
 
@@ -270,52 +219,14 @@ func TestParseArgs_ModelNotPassedThrough(t *testing.T) {
 }
 
 // --- --idle-timeout strict parsing tests ---
-
-func TestParseArgs_IdleTimeout_Seconds(t *testing.T) {
-	a := mustParseArgs(t, []string{"--idle-timeout", "30s"})
-	if a.IdleTimeout != 30*time.Second {
-		t.Errorf("expected 30s, got %v", a.IdleTimeout)
-	}
-}
-
-func TestParseArgs_IdleTimeout_Minutes(t *testing.T) {
-	a := mustParseArgs(t, []string{"--idle-timeout", "5m"})
-	if a.IdleTimeout != 5*time.Minute {
-		t.Errorf("expected 5m, got %v", a.IdleTimeout)
-	}
-}
-
-func TestParseArgs_IdleTimeout_Hours(t *testing.T) {
-	a := mustParseArgs(t, []string{"--idle-timeout", "1h"})
-	if a.IdleTimeout != time.Hour {
-		t.Errorf("expected 1h, got %v", a.IdleTimeout)
-	}
-}
-
-func TestParseArgs_IdleTimeout_Equals(t *testing.T) {
-	a := mustParseArgs(t, []string{"--idle-timeout=2h30m"})
-	if a.IdleTimeout != 2*time.Hour+30*time.Minute {
-		t.Errorf("expected 2h30m, got %v", a.IdleTimeout)
-	}
-}
-
-func TestParseArgs_IdleTimeout_BareIntRejected(t *testing.T) {
-	if _, err := parseArgs([]string{"--idle-timeout", "30"}); err == nil {
-		t.Error("expected error for bare int --idle-timeout, got nil")
-	}
-}
-
-func TestParseArgs_IdleTimeout_GarbageRejected(t *testing.T) {
-	if _, err := parseArgs([]string{"--idle-timeout", "30mins"}); err == nil {
-		t.Error("expected error for '30mins' --idle-timeout, got nil")
-	}
-}
-
-func TestParseArgs_IdleTimeout_EmptyRejected(t *testing.T) {
-	if _, err := parseArgs([]string{"--idle-timeout="}); err == nil {
-		t.Error("expected error for empty --idle-timeout, got nil")
-	}
-}
+//
+// #89 removed --idle-timeout from the root flag set; parseArgs no longer
+// recognises it. The duration-parsing strict-validation surface (seconds /
+// minutes / hours / equals / bare-int rejected / garbage rejected / empty
+// rejected) lives on the serve subcommand now and is exercised by
+// TestBuildServeArgs_IdleTimeout* in serve_cmd_test.go. The legacy
+// --idle-timeout root flag falls through to CodexArgs (verified by
+// TestParseArgs_Table's "legacy --idle-timeout passes through" case).
 
 // Table-driven comprehensive test for parseArgs.
 func TestParseArgs_Table(t *testing.T) {
@@ -326,26 +237,51 @@ func TestParseArgs_Table(t *testing.T) {
 	}{
 		{name: "--help sets showHelp", args: []string{"--help"}, want: Args{ShowHelp: true}},
 		{name: "-h sets showHelp", args: []string{"-h"}, want: Args{ShowHelp: true}},
-		{name: "--print-env sets printEnv", args: []string{"--print-env"}, want: Args{PrintEnv: true}},
 		{name: "--version sets version", args: []string{"--version"}, want: Args{Version: true}},
 		{name: "--verbose sets verbose", args: []string{"--verbose"}, want: Args{Verbose: true}},
 		{name: "-v sets verbose", args: []string{"-v"}, want: Args{Verbose: true}},
 		{name: "--log-file sets logFile", args: []string{"--log-file", "/tmp/test.log"}, want: Args{LogFile: "/tmp/test.log"}},
 		{name: "--log-file=value", args: []string{"--log-file=/tmp/test.log"}, want: Args{LogFile: "/tmp/test.log"}},
 		{name: "--upstream sets upstream", args: []string{"--upstream", "https://gw.example.com"}, want: Args{Upstream: "https://gw.example.com"}},
-		{name: "--no-otel sets noOtel", args: []string{"--no-otel"}, want: Args{NoOtel: true}},
 		{name: "empty args all defaults", args: []string{}, want: Args{}},
 		{name: "--profile", args: []string{"--profile", "aidev"}, want: Args{Profile: "aidev"}},
 		{name: "--profile=value", args: []string{"--profile=aidev"}, want: Args{Profile: "aidev"}},
-		{name: "--otel", args: []string{"--otel"}, want: Args{Otel: true}},
-		{name: "--otel and --no-otel", args: []string{"--otel", "--no-otel"}, want: Args{Otel: true, NoOtel: true}},
 		{name: "--model", args: []string{"--model", "my-model"}, want: Args{Model: "my-model", ModelSet: true}},
 		{name: "--port", args: []string{"--port", "9999"}, want: Args{PortFlag: 9999}},
-		{name: "--headless", args: []string{"--headless"}, want: Args{Headless: true}},
-		{name: "--install-hooks", args: []string{"--install-hooks"}, want: Args{InstallHooksFlag: true}},
-		{name: "--uninstall-hooks", args: []string{"--uninstall-hooks"}, want: Args{UninstallHooksFlag: true}},
-		{name: "--headless-ensure", args: []string{"--headless-ensure"}, want: Args{HeadlessEnsureFlag: true}},
 		{name: "--no-update-check", args: []string{"--no-update-check"}, want: Args{NoUpdateCheck: true}},
+		{
+			// #88 removed --install-hooks; the legacy flag is no longer in
+			// knownFlags, so parseArgs forwards it to codex unchanged.
+			name: "legacy --install-hooks now passes through to codex",
+			args: []string{"--install-hooks"},
+			want: Args{CodexArgs: []string{"--install-hooks"}},
+		},
+		{
+			name: "legacy --uninstall-hooks now passes through to codex",
+			args: []string{"--uninstall-hooks"},
+			want: Args{CodexArgs: []string{"--uninstall-hooks"}},
+		},
+		{
+			name: "legacy --headless-ensure now passes through to codex",
+			args: []string{"--headless-ensure"},
+			want: Args{CodexArgs: []string{"--headless-ensure"}},
+		},
+		{
+			// #89 removed --headless; the legacy flag is no longer in
+			// knownFlags, so parseArgs forwards it to codex unchanged.
+			// Users should migrate to `databricks-codex serve`.
+			name: "legacy --headless now passes through to codex",
+			args: []string{"--headless"},
+			want: Args{CodexArgs: []string{"--headless"}},
+		},
+		{
+			// #89 removed --idle-timeout. parseArgs forwards both the
+			// flag name and its value as separate codex args (it has no
+			// way to know the flag took a value).
+			name: "legacy --idle-timeout now passes through to codex",
+			args: []string{"--idle-timeout", "5m"},
+			want: Args{CodexArgs: []string{"--idle-timeout", "5m"}},
+		},
 	}
 
 	for _, tc := range tests {
@@ -363,12 +299,6 @@ func TestParseArgs_Table(t *testing.T) {
 			if got.ShowHelp != tc.want.ShowHelp {
 				t.Errorf("ShowHelp: got %v, want %v", got.ShowHelp, tc.want.ShowHelp)
 			}
-			if got.PrintEnv != tc.want.PrintEnv {
-				t.Errorf("PrintEnv: got %v, want %v", got.PrintEnv, tc.want.PrintEnv)
-			}
-			if got.NoOtel != tc.want.NoOtel {
-				t.Errorf("NoOtel: got %v, want %v", got.NoOtel, tc.want.NoOtel)
-			}
 			if got.Upstream != tc.want.Upstream {
 				t.Errorf("Upstream: got %q, want %q", got.Upstream, tc.want.Upstream)
 			}
@@ -377,9 +307,6 @@ func TestParseArgs_Table(t *testing.T) {
 			}
 			if got.Profile != tc.want.Profile {
 				t.Errorf("Profile: got %q, want %q", got.Profile, tc.want.Profile)
-			}
-			if got.Otel != tc.want.Otel {
-				t.Errorf("Otel: got %v, want %v", got.Otel, tc.want.Otel)
 			}
 			if got.Model != tc.want.Model {
 				t.Errorf("Model: got %q, want %q", got.Model, tc.want.Model)
@@ -393,17 +320,11 @@ func TestParseArgs_Table(t *testing.T) {
 			if got.Headless != tc.want.Headless {
 				t.Errorf("Headless: got %v, want %v", got.Headless, tc.want.Headless)
 			}
-			if got.InstallHooksFlag != tc.want.InstallHooksFlag {
-				t.Errorf("InstallHooksFlag: got %v, want %v", got.InstallHooksFlag, tc.want.InstallHooksFlag)
-			}
-			if got.UninstallHooksFlag != tc.want.UninstallHooksFlag {
-				t.Errorf("UninstallHooksFlag: got %v, want %v", got.UninstallHooksFlag, tc.want.UninstallHooksFlag)
-			}
-			if got.HeadlessEnsureFlag != tc.want.HeadlessEnsureFlag {
-				t.Errorf("HeadlessEnsureFlag: got %v, want %v", got.HeadlessEnsureFlag, tc.want.HeadlessEnsureFlag)
-			}
 			if got.NoUpdateCheck != tc.want.NoUpdateCheck {
 				t.Errorf("NoUpdateCheck: got %v, want %v", got.NoUpdateCheck, tc.want.NoUpdateCheck)
+			}
+			if !equalStringSlice(got.CodexArgs, tc.want.CodexArgs) {
+				t.Errorf("CodexArgs: got %v, want %v", got.CodexArgs, tc.want.CodexArgs)
 			}
 		})
 	}
@@ -532,12 +453,12 @@ func TestHandleHelp_ContainsDatabricksCodex(t *testing.T) {
 	}
 }
 
-func TestHandleHelp_ContainsPrintEnvFlag(t *testing.T) {
+func TestHandleHelp_ContainsConfigSubcommand(t *testing.T) {
 	out := captureStdout(func() {
 		handleHelp("")
 	})
-	if !strings.Contains(out, "--print-env") {
-		t.Errorf("expected help output to contain '--print-env', got:\n%s", out)
+	if !strings.Contains(out, "config") {
+		t.Errorf("expected help output to advertise the config subcommand, got:\n%s", out)
 	}
 }
 
@@ -574,10 +495,32 @@ func TestParseArgs_ProfileEquals(t *testing.T) {
 	}
 }
 
-func TestParseArgs_Headless(t *testing.T) {
+// TestParseArgs_LegacyHeadlessPassthrough locks the breaking surface from
+// #89: the deleted --headless root flag must NOT be recognised by parseArgs;
+// it forwards to CodexArgs unchanged. Catches the regression where someone
+// re-adds the case in parseArgs without bringing back the flag.
+func TestParseArgs_LegacyHeadlessPassthrough(t *testing.T) {
 	a := mustParseArgs(t, []string{"--headless"})
-	if !a.Headless {
-		t.Error("expected Headless=true for --headless")
+	if a.Headless {
+		t.Error("Args.Headless must NOT be set by parseArgs after #89; only runServeCommand sets it")
+	}
+	if len(a.CodexArgs) != 1 || a.CodexArgs[0] != "--headless" {
+		t.Errorf("legacy --headless must pass through to CodexArgs, got %v", a.CodexArgs)
+	}
+}
+
+// TestParseArgs_LegacyIdleTimeoutPassthrough is the symmetric check for
+// the deleted --idle-timeout root flag.
+func TestParseArgs_LegacyIdleTimeoutPassthrough(t *testing.T) {
+	a := mustParseArgs(t, []string{"--idle-timeout", "5m"})
+	if a.IdleTimeout != 0 {
+		t.Errorf("Args.IdleTimeout must NOT be set by parseArgs after #89, got %v", a.IdleTimeout)
+	}
+	// The flag name and its value both fall through as positional args
+	// because parseArgs has no metadata to tell it the legacy flag took a
+	// value. Both tokens land in CodexArgs.
+	if len(a.CodexArgs) != 2 || a.CodexArgs[0] != "--idle-timeout" || a.CodexArgs[1] != "5m" {
+		t.Errorf("legacy --idle-timeout must pass through to CodexArgs, got %v", a.CodexArgs)
 	}
 }
 
@@ -588,21 +531,45 @@ func TestParseArgs_NoUpdateCheck(t *testing.T) {
 	}
 }
 
-func TestParseArgs_Otel(t *testing.T) {
-	a := mustParseArgs(t, []string{"--otel"})
-	if !a.Otel {
-		t.Error("expected Otel=true for --otel")
-	}
-}
-
 func TestHandleHelp_AllFlagsPresent(t *testing.T) {
 	out := captureStdout(func() {
 		handleHelp("")
 	})
-	flags := []string{"--profile", "--model", "--upstream", "--verbose", "-v", "--log-file", "--otel", "--no-otel", "--otel-logs-table", "--port", "--headless", "--headless-ensure", "--idle-timeout", "--install-hooks", "--uninstall-hooks", "--no-update-check", "--version", "--help"}
+	// Legacy hook flags (--install-hooks / --uninstall-hooks /
+	// --headless-ensure) were lifted to the `hooks` subcommand in #88; the
+	// OTEL/--print-env flags moved to `config otel`/`config show` in #87.
+	// --headless / --idle-timeout were lifted to the `serve` subcommand in
+	// #89. The help text now lists `config`, `hooks`, and `serve` instead.
+	flags := []string{"--profile", "--model", "--upstream", "--verbose", "-v", "--log-file", "--port", "--no-update-check", "--version", "--help", "config", "hooks", "serve"}
 	for _, flag := range flags {
 		if !strings.Contains(out, flag) {
 			t.Errorf("expected help output to contain flag %q, got:\n%s", flag, out)
+		}
+	}
+}
+
+// TestHandleHelp_LegacyHeadlessFlagsAbsent locks the breaking surface
+// change from #89: --headless and --idle-timeout must NOT appear in the
+// root help text. If a future refactor re-adds them, this test fires.
+func TestHandleHelp_LegacyHeadlessFlagsAbsent(t *testing.T) {
+	out := captureStdout(func() {
+		handleHelp("")
+	})
+	for _, flag := range []string{"--headless", "--idle-timeout"} {
+		if strings.Contains(out, flag) {
+			t.Errorf("root help still mentions %q after #89 migration; users will discover the dead flag", flag)
+		}
+	}
+}
+
+func TestHandleHelp_LegacyOtelFlagsAbsent(t *testing.T) {
+	// Locks the breaking surface: #87 removed these from the root.
+	out := captureStdout(func() {
+		handleHelp("")
+	})
+	for _, flag := range []string{"--otel", "--no-otel", "--no-otel-metrics", "--no-otel-logs", "--otel-metrics-table", "--otel-logs-table", "--print-env"} {
+		if strings.Contains(out, flag) {
+			t.Errorf("root help still mentions %q after #87 migration; users will discover the dead flag", flag)
 		}
 	}
 }
@@ -616,61 +583,11 @@ func TestHandleHelp_ContainsVersion(t *testing.T) {
 	}
 }
 
-// --- resolveOtelLogsTable / resolveOtelMetricsTable / deriveLogsTable tests ---
-
-func TestResolveOtelLogsTable(t *testing.T) {
-	tests := []struct {
-		name         string
-		flagValue    string
-		flagSet      bool
-		savedValue   string
-		metricsTable string
-		otel         bool
-		want         string
-	}{
-		{name: "otel disabled returns empty", otel: false, savedValue: "saved.table", want: ""},
-		{name: "flag set with value wins", flagValue: "custom.db.table", flagSet: true, otel: true, want: "custom.db.table"},
-		{name: "flag set wins over saved", flagValue: "flag.table", flagSet: true, savedValue: "saved.table", otel: true, want: "flag.table"},
-		{name: "saved value used when flag not set", flagSet: false, savedValue: "saved.table", otel: true, want: "saved.table"},
-		{name: "derives from metrics when no flag and no saved", flagSet: false, metricsTable: "main.tel.codex_otel_metrics", otel: true, want: "main.tel.codex_otel_logs"},
-		{name: "default when no flag, saved, or metrics", flagSet: false, otel: true, want: "main.codex_telemetry.codex_otel_logs"},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			got := resolveOtelLogsTable(tc.flagValue, tc.flagSet, tc.savedValue, tc.metricsTable, tc.otel)
-			if got != tc.want {
-				t.Errorf("resolveOtelLogsTable(%q, %v, %q, %q, %v) = %q, want %q",
-					tc.flagValue, tc.flagSet, tc.savedValue, tc.metricsTable, tc.otel, got, tc.want)
-			}
-		})
-	}
-}
-
-func TestResolveOtelMetricsTable(t *testing.T) {
-	tests := []struct {
-		name       string
-		flagValue  string
-		flagSet    bool
-		savedValue string
-		otel       bool
-		want       string
-	}{
-		{name: "otel disabled returns empty", otel: false, savedValue: "saved.metrics", want: ""},
-		{name: "flag set wins", flagValue: "flag.metrics", flagSet: true, savedValue: "saved.metrics", otel: true, want: "flag.metrics"},
-		{name: "saved used when flag not set", flagSet: false, savedValue: "saved.metrics", otel: true, want: "saved.metrics"},
-		{name: "default when nothing set", flagSet: false, otel: true, want: "main.codex_telemetry.codex_otel_metrics"},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			got := resolveOtelMetricsTable(tc.flagValue, tc.flagSet, tc.savedValue, tc.otel)
-			if got != tc.want {
-				t.Errorf("resolveOtelMetricsTable(%q, %v, %q, %v) = %q, want %q",
-					tc.flagValue, tc.flagSet, tc.savedValue, tc.otel, got, tc.want)
-			}
-		})
-	}
-}
+// --- deriveLogsTable test ---
+//
+// resolveOtelLogsTable / resolveOtelMetricsTable were inlined into the
+// `config otel enable` resolver in #87; their unit tests folded into
+// TestResolveConfigOTEL_OrchestrationMatrix in cli_config_test.go.
 
 func TestDeriveLogsTable(t *testing.T) {
 	tests := []struct {
@@ -693,12 +610,13 @@ func TestDeriveLogsTable(t *testing.T) {
 	}
 }
 
-// --- resolveOtel integration tests ---
+// --- resolveOtel integration tests (state-only signature, post-#87) ---
 //
-// resolveOtel is the orchestration that ties flag parsing + saved state into
-// the final (otel, metricsTable, logsTable) tuple that drives config.toml
-// patching. These tests exercise the full matrix of flag combinations
-// against a populated state file, mirroring databricks-claude's behavior.
+// #87 turned resolveOtel into a pure read-only consumer of saved state.
+// The session-time flag combinations that drove the legacy resolveOtel
+// matrix moved to TestResolveConfigOTEL_OrchestrationMatrix
+// (cli_config_test.go) — that's the writer side. resolveOtel is the
+// reader side and is much smaller now.
 
 func TestResolveOtel(t *testing.T) {
 	const customMetrics = "cat.schema.codex_otel_metrics"
@@ -706,110 +624,59 @@ func TestResolveOtel(t *testing.T) {
 
 	tests := []struct {
 		name        string
-		args        *Args
 		saved       persistentState
 		wantOtel    bool
 		wantMetrics string
 		wantLogs    string
 	}{
 		{
-			name:     "no flags, empty state: otel off, both tables empty",
-			args:     &Args{},
+			name:     "empty state: otel off, both tables empty",
 			saved:    persistentState{},
 			wantOtel: false, wantMetrics: "", wantLogs: "",
 		},
 		{
-			name:        "no flags but saved tables: implicit-enable, both tables flow through",
-			args:        &Args{},
+			name:        "saved tables, no disables: otel on, both tables flow through",
 			saved:       persistentState{OtelMetricsTable: customMetrics, OtelLogsTable: customLogs},
 			wantOtel:    true,
 			wantMetrics: customMetrics,
 			wantLogs:    customLogs,
 		},
 		{
-			name:        "--otel with empty state uses both defaults",
-			args:        &Args{Otel: true},
-			saved:       persistentState{},
-			wantOtel:    true,
-			wantMetrics: "main.codex_telemetry.codex_otel_metrics",
-			wantLogs:    "main.codex_telemetry.codex_otel_logs",
-		},
-		{
-			name:     "--no-otel with saved tables: hard off, both tables empty",
-			args:     &Args{NoOtel: true},
-			saved:    persistentState{OtelMetricsTable: customMetrics, OtelLogsTable: customLogs},
+			name:     "saved tables but both Disabled bits set: hard off (the post-`config otel disable` shape)",
+			saved:    persistentState{OtelMetricsTable: customMetrics, OtelLogsTable: customLogs, OtelMetricsDisabled: true, OtelLogsDisabled: true},
 			wantOtel: false, wantMetrics: "", wantLogs: "",
 		},
 		{
-			name:        "--no-otel-metrics with saved tables: metrics off, LOGS PRESERVED (the bug we fixed)",
-			args:        &Args{NoOtelMetrics: true},
-			saved:       persistentState{OtelMetricsTable: customMetrics, OtelLogsTable: customLogs},
-			wantOtel:    true, // implicit-enable from saved state
+			name:        "saved tables with metrics disabled only: logs preserved (the per-signal disable shape)",
+			saved:       persistentState{OtelMetricsTable: customMetrics, OtelLogsTable: customLogs, OtelMetricsDisabled: true},
+			wantOtel:    true,
 			wantMetrics: "",
 			wantLogs:    customLogs,
 		},
 		{
-			name:        "--no-otel-logs with saved tables: logs off, METRICS PRESERVED",
-			args:        &Args{NoOtelLogs: true},
-			saved:       persistentState{OtelMetricsTable: customMetrics, OtelLogsTable: customLogs},
-			wantOtel:    true, // implicit-enable from saved state
-			wantMetrics: customMetrics,
-			wantLogs:    "",
-		},
-		{
-			name:        "--otel --no-otel-metrics: explicit on + metrics-off, logs default applies",
-			args:        &Args{Otel: true, NoOtelMetrics: true},
-			saved:       persistentState{},
-			wantOtel:    true,
-			wantMetrics: "",
-			wantLogs:    "main.codex_telemetry.codex_otel_logs",
-		},
-		{
-			name:        "--otel --no-otel-logs: explicit on + logs-off, metrics default applies",
-			args:        &Args{Otel: true, NoOtelLogs: true},
-			saved:       persistentState{},
-			wantOtel:    true,
-			wantMetrics: "main.codex_telemetry.codex_otel_metrics",
-			wantLogs:    "",
-		},
-		{
-			name: "explicit --otel-metrics-table flag implicit-enables otel even without --otel",
-			args: &Args{
-				OtelMetricsTable:    customMetrics,
-				OtelMetricsTableSet: true,
-			},
-			saved:       persistentState{},
+			name:        "saved tables with logs disabled only: metrics preserved",
+			saved:       persistentState{OtelMetricsTable: customMetrics, OtelLogsTable: customLogs, OtelLogsDisabled: true},
 			wantOtel:    true,
 			wantMetrics: customMetrics,
-			wantLogs:    "cat.schema.codex_otel_logs", // derived
-		},
-		{
-			name:     "--no-otel beats everything else (even an explicit metrics flag)",
-			args:     &Args{NoOtel: true, OtelMetricsTable: customMetrics, OtelMetricsTableSet: true},
-			saved:    persistentState{},
-			wantOtel: false, wantMetrics: "", wantLogs: "",
-		},
-		{
-			name:        "--no-otel-metrics + --no-otel-logs with saved tables: both off, but otel stays implicit-on",
-			args:        &Args{NoOtelMetrics: true, NoOtelLogs: true},
-			saved:       persistentState{OtelMetricsTable: customMetrics, OtelLogsTable: customLogs},
-			wantOtel:    true,
-			wantMetrics: "",
 			wantLogs:    "",
 		},
 		{
-			name:        "saved metrics only: implicit-enable, logs derived from metrics",
-			args:        &Args{},
+			name:        "saved metrics only: otel on, logs empty",
 			saved:       persistentState{OtelMetricsTable: customMetrics},
 			wantOtel:    true,
 			wantMetrics: customMetrics,
-			wantLogs:    "cat.schema.codex_otel_logs",
+			wantLogs:    "",
+		},
+		{
+			name:     "Disabled bits set on empty tables: still off (no-op)",
+			saved:    persistentState{OtelMetricsDisabled: true, OtelLogsDisabled: true},
+			wantOtel: false, wantMetrics: "", wantLogs: "",
 		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			otel, metrics, logs := resolveOtel(tc.args, tc.saved)
+			otel, metrics, logs := resolveOtel(tc.saved)
 			if otel != tc.wantOtel {
 				t.Errorf("otel: got %v, want %v", otel, tc.wantOtel)
 			}
@@ -970,6 +837,46 @@ func TestKnownFlagsCoverAllFlagDefs(t *testing.T) {
 		name := "--" + f.Name
 		if !knownFlags[name] {
 			t.Errorf("flagDef %q is missing from knownFlags in completion_flags.go", name)
+		}
+	}
+}
+
+// TestRootTreeFlagsAreParseRecognised verifies that every flag declared on
+// rootCommand (the source of truth for the binary's CLI surface) is actually
+// handled by parseArgs. Catches the case where a flag is added to the tree
+// in commands.go but the matching switch case is forgotten in main.go's
+// parseArgs — the explicit default arm in parseArgs returns an error in
+// that scenario, which this test surfaces as a per-flag failure.
+//
+// This is the "tree → parser" half of the bidirectional parity check;
+// TestParseArgsRecognisedFlagsAreInTree below covers the inverse direction.
+func TestRootTreeFlagsAreParseRecognised(t *testing.T) {
+	for _, f := range rootCommand.AllFlags() {
+		var args []string
+		if f.TakesArg {
+			args = []string{"--" + f.Name, "value"}
+		} else {
+			args = []string{"--" + f.Name}
+		}
+		if _, err := parseArgs(args); err != nil {
+			t.Errorf("parseArgs(%v) returned error %v — flag %q is declared on rootCommand but parseArgs has no case for it", args, err, f.Name)
+		}
+	}
+}
+
+// TestParseArgsRecognisedFlagsAreInTree is the inverse parity check: every
+// flag the parser thinks it owns (knownFlags) must appear in rootCommand.
+// Since knownFlags is now derived from rootCommand, this is structurally
+// guaranteed — the test is here to document the contract and to fail
+// loudly if a future refactor decouples the two.
+func TestParseArgsRecognisedFlagsAreInTree(t *testing.T) {
+	treeNames := map[string]bool{}
+	for _, f := range rootCommand.AllFlags() {
+		treeNames["--"+f.Name] = true
+	}
+	for name := range knownFlags {
+		if !treeNames[name] {
+			t.Errorf("knownFlags contains %q but it is not declared on rootCommand", name)
 		}
 	}
 }

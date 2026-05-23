@@ -86,13 +86,6 @@ databricks-codex --upstream https://adb-123456789.azuredatabricks.net/ai-gateway
 |------|---------|-------------|
 | `--verbose`, `-v` | `false` | Enable debug logging to stderr |
 | `--log-file` | | Write debug logs to a file (combinable with `--verbose`) |
-| `--print-env` | | Print resolved configuration (token redacted) and exit |
-| `--otel` | `false` | Enable OpenTelemetry export (metrics + logs) |
-| `--no-otel` | | Disable OpenTelemetry for this session (saved tables preserved) |
-| `--otel-metrics-table` | `main.codex_telemetry.codex_otel_metrics` (when `--otel` is set) | Unity Catalog table for OpenTelemetry metrics |
-| `--otel-logs-table` | derived from metrics table when omitted | Unity Catalog table for OpenTelemetry logs |
-| `--no-otel-metrics` | | Disable metrics for this session (saved table preserved) |
-| `--no-otel-logs` | | Disable logs for this session (saved table preserved) |
 | `--profile` | saved/`DEFAULT` | Databricks CLI profile (saved to state file; `--profile` flag writes it once) |
 | `--model` | `databricks-gpt-5-5` | Model to use (saved for future sessions) |
 | `--port` | `49154` | Proxy listen port (saved for future sessions) |
@@ -100,14 +93,57 @@ databricks-codex --upstream https://adb-123456789.azuredatabricks.net/ai-gateway
 | `--proxy-api-key` | disabled | Require this API key on all local proxy requests |
 | `--tls-cert` | | TLS certificate file for the local proxy (requires `--tls-key`) |
 | `--tls-key` | | TLS private key file for the local proxy (requires `--tls-cert`) |
-| `--headless` | `false` | Start proxy without launching codex (for IDE extensions or hooks) |
-| `--idle-timeout` | `30m` | Idle timeout for headless mode (`0` disables; bare number = minutes) |
-| `--install-hooks` | | Install SessionStart hook into `~/.codex/hooks.json` |
-| `--uninstall-hooks` | | Remove databricks-codex hooks from `~/.codex/hooks.json` |
 | `--version` | | Print version and exit |
 | `--help`, `-h` | | Print wrapper flags and the full `codex --help` output, then exit |
 
+Headless / idle-timeout knobs live under `databricks-codex serve` (see [`serve` Subcommand](#serve-subcommand)).
+Hook installation lives under `databricks-codex hooks` (see [`hooks` Subcommand](#hooks-subcommand)).
+
 All other flags and args are forwarded to `codex`.
+
+> **Breaking in v0.12.0:** the persistent-config root flags `--otel`,
+> `--no-otel`, `--no-otel-metrics`, `--no-otel-logs`, `--otel-metrics-table`,
+> `--otel-logs-table`, and `--print-env` are gone. They moved under
+> `databricks-codex config` — see the [config Subcommand](#config-subcommand)
+> section below.
+
+> **Breaking in v0.13.0:** the session-mode root flags `--headless` and
+> `--idle-timeout` are gone. They moved under `databricks-codex serve` —
+> see the [serve Subcommand](#serve-subcommand) section below. The
+> SessionStart hook installed by `databricks-codex hooks install`
+> continues to work transparently — it spawns `databricks-codex serve`
+> internally now.
+
+## config Subcommand
+
+`databricks-codex config <subcommand>` is the persistent-config editor.
+Mutations are written to `~/.codex/.databricks-codex.json` (the state file)
+so they take effect on the **next** `databricks-codex` invocation; the
+session you're currently in is unaffected. `~/.codex/config.toml` is not
+touched by `config.*` commands — it is owned by the proxy lifecycle and
+re-emitted at every session start based on the state file.
+
+| Command | Replaces | Description |
+|---------|----------|-------------|
+| `config otel enable [--metrics-table T] [--logs-table T] [--profile P]` | `--otel`, `--otel-metrics-table`, `--otel-logs-table` | Persist OTEL table preferences. Logs table derives from metrics table when only `--metrics-table` is given. With no flags and no saved state, applies the legacy default `main.codex_telemetry.codex_otel_metrics`. |
+| `config otel disable [--metrics] [--logs]` | `--no-otel`, `--no-otel-metrics`, `--no-otel-logs` | Mark OTEL signals off in state. With no flags, both signals disabled (legacy `--no-otel` semantics). Table-name preferences are **preserved** — a future `config otel enable` restores them without re-typing. |
+| `config show` | `--print-env` | Print the resolved configuration (token redacted) and exit. Read-only. |
+
+```bash
+# Enable with custom metrics + logs tables — table names persist to state:
+databricks-codex config otel enable \
+  --metrics-table main.codex_telemetry.codex_otel_metrics \
+  --logs-table   main.codex_telemetry.codex_otel_logs
+
+# Disable just metrics; logs keep exporting on the next session:
+databricks-codex config otel disable --metrics
+
+# Disable both signals (legacy --no-otel) — table names remain in state:
+databricks-codex config otel disable
+
+# Re-enable later — saved tables resurface, no re-typing:
+databricks-codex config otel enable
+```
 
 ## Auto-Discovery
 
@@ -120,10 +156,10 @@ On startup, `databricks-codex` auto-discovers:
 
 ### Verify your resolved configuration
 
-Run `--print-env` to print the resolved profile, Databricks host, upstream base URL, redacted token placeholder, OpenTelemetry metrics and logs tables, and detected Codex binary path, then exit without launching Codex.
+Run `config show` to print the resolved profile, Databricks host, upstream base URL, redacted token placeholder, OpenTelemetry metrics and logs tables, and detected Codex binary path, then exit without launching Codex.
 
 ```bash
-databricks-codex --print-env
+databricks-codex config show
 ```
 
 Example output:
@@ -161,38 +197,83 @@ This lets the wrapper:
 
 `databricks-codex --help` (or `-h`) prints the wrapper's own flags followed by the complete `codex --help` output.
 
-## Session Hooks (automatic proxy lifecycle)
+## serve Subcommand
 
-Install hooks so every Codex session auto-starts the proxy on startup — no manual `--headless` needed.
+`databricks-codex serve` runs the proxy in headless mode without launching `codex`. Useful when an IDE extension or other tool needs the proxy up but doesn't want a child `codex` process. Replaces the legacy root flags `--headless` and `--idle-timeout`, which were removed in v0.13.
+
+| Flag | Default | Description |
+| --- | --- | --- |
+| `--idle-timeout` | `30m` | Shut the proxy down after this much idle time. `0` disables (long-running IDE sessions). Accepts Go duration strings: `30s`, `5m`, `1h`, `2h30m`. Bare integers (e.g. `30`) are rejected. |
+| `--profile` | state file > `DEFAULT` | Databricks CLI profile. |
+| `--port` | state file > `49154` | Proxy listen port. |
+| `--model` | saved | Model name (saved to state file when supplied). |
+| `--upstream` | auto-discovered | Override the AI Gateway URL. |
+| `--log-file` | | Write debug logs to this file (combinable with `--verbose`). |
+| `--verbose`, `-v` | `false` | Enable debug logging to stderr. |
+| `--proxy-api-key` | disabled | Require this API key on all proxy requests. |
+| `--tls-cert` | | TLS certificate file (requires `--tls-key`). |
+| `--tls-key` | | TLS private key file (requires `--tls-cert`). |
+| `--no-update-check` | | Skip the automatic update check on startup. |
+| `--help`, `-h` | | Show help and exit. |
+
+The proxy prints `PROXY_URL=http://127.0.0.1:<port>` (or `https://...` with TLS) to stdout once bound. It exits when:
+
+- `SIGINT` or `SIGTERM` is received.
+- `POST /shutdown` is hit on the proxy URL.
+- `--idle-timeout` elapses with zero in-flight requests.
+
+```bash
+# Default 30-minute idle timeout:
+databricks-codex serve
+
+# Tight timeout for tests / CI:
+databricks-codex serve --idle-timeout 5m
+
+# Disable idle shutdown for a long-running IDE session:
+databricks-codex serve --idle-timeout 0
+```
+
+The SessionStart hook installed by `databricks-codex hooks install` spawns `databricks-codex serve` under the hood — you don't need to invoke this manually for the hooks path.
+
+## `hooks` Subcommand
+
+Install hooks so every Codex session auto-starts the proxy on startup — no manual `databricks-codex serve` needed. Replaces the legacy root flags (`--install-hooks` / `--uninstall-hooks` / `--headless-ensure`), which were removed in v0.12.
 
 > **First-time setup:** Run `databricks-codex` at least once before installing hooks. This writes `~/.codex/config.toml` so the proxy is used for all Codex sessions.
+
+| Subcommand | Purpose |
+| --- | --- |
+| `databricks-codex hooks install` | Install SessionStart hook into `~/.codex/hooks.json` |
+| `databricks-codex hooks uninstall` | Remove databricks-codex hooks from `~/.codex/hooks.json` |
+| `databricks-codex hooks session-start` | Hook-invoked internal — start proxy if not running |
 
 ### Install
 
 ```bash
-databricks-codex --install-hooks
+databricks-codex hooks install
 ```
 
 This merges a **SessionStart** hook into `~/.codex/hooks.json` and enables the `hooks` feature flag in `~/.codex/config.toml`:
 
-- **SessionStart** (`startup`): runs `databricks-codex --headless-ensure` — starts the proxy if it isn't already running.
+- **SessionStart** (`startup`): runs `databricks-codex hooks session-start` — starts the proxy if it isn't already running.
 
 ### Shutdown
 
-Unlike Claude Code, the Codex CLI does not have a `SessionEnd` hook event. The proxy shuts itself down automatically after **30 minutes of inactivity** (configurable via `--idle-timeout`). You can also stop it manually with `POST /shutdown` or by sending a signal to the process.
+Unlike Claude Code, the Codex CLI does not have a `SessionEnd` hook event. The proxy shuts itself down automatically after **30 minutes of inactivity** (configurable via `databricks-codex serve --idle-timeout <dur>` for direct invocations; the SessionStart hook spawns the proxy with the default 30-minute timeout). You can also stop it manually with `POST /shutdown` or by sending a signal to the process.
 
 ### Uninstall
 
 ```bash
-databricks-codex --uninstall-hooks
+databricks-codex hooks uninstall
 ```
 
 Removes only the databricks-codex hook entries. Other hooks in your `hooks.json` are untouched.
 
 ### Notes
 
-- Safe to rerun `--install-hooks` after upgrades — existing hooks are replaced, not duplicated.
+- Safe to rerun `hooks install` after upgrades — existing hooks are replaced, not duplicated.
 - Custom port settings persist automatically via the state file (`~/.codex/.databricks-codex.json`).
+- `hooks session-start` is wired by `hooks install` for you; running it manually is a no-op when the proxy is already up.
 
 ## Shell Tab Completions
 
