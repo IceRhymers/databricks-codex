@@ -148,6 +148,29 @@ var managedSections = []string{
 	"otel",
 }
 
+// managedRootKeys lists root-level keys we own in base config.toml.
+//
+// Why root keys, even though profile-v2 gives us a sibling layer:
+//
+//   - The Codex GUI (and certain IDE extensions / raw `codex` invocations
+//     that don't pass --profile) ignore profile-v2 layering and read the
+//     root-level `model_provider` directly. Without these root keys, the
+//     GUI falls through to the built-in `openai` provider (which has
+//     supports_websockets = true hardcoded), attempts a WebSocket
+//     upgrade against Databricks AI Gateway, and gets HTTP 400.
+//     Confirmed by upstream issue openai/codex#13041 — the recommended
+//     workaround is exactly this root-level provider override.
+//
+//   - The transparent-wrapper path (`databricks-codex "..."`) still uses
+//     --profile databricks-proxy + the sibling file. Both paths converge
+//     on the same provider, because the sibling overrides root with the
+//     same values.
+//
+// We do NOT write a root `profile = "..."` key — Codex profile-v2 rejects
+// that (codex-rs/core/src/config/mod.rs:2606) and stripping it on Patch
+// is the migration path for users upgrading from pre-v0.7.
+var managedRootKeys = []string{"model_provider", "model"}
+
 // Patch performs surgical patching of config.toml: it reads the existing file,
 // saves originals for keys/sections it will touch, then injects/updates only
 // managed keys and sections. All non-managed content is preserved byte-for-byte.
@@ -180,6 +203,18 @@ func (m *Manager) Patch(cfg PatchConfig) error {
 		content = m.stripRootKey(content, "profile")
 	}
 	content = m.stripSection(content, "profiles.databricks-proxy")
+
+	// --- Root-level provider override (fixes GUI / raw codex paths) ---
+	//
+	// See managedRootKeys doc above. Root model_provider points at our
+	// proxy provider; root model is the resolved value (same as what we
+	// put in the sibling file). On Restore, the user's original root
+	// model/model_provider come back via origRootKeys.
+	content = m.patchRootKey(content, "model_provider", fmt.Sprintf("%q", SiblingProfileName))
+	rootModel := m.resolveSiblingModel(cfg, rootProfileVal)
+	if rootModel != "" {
+		content = m.patchRootKey(content, "model", fmt.Sprintf("%q", rootModel))
+	}
 
 	// --- Sections we still own in base config.toml ---
 	content = m.patchSection(content, "model_providers.databricks-proxy",
@@ -274,12 +309,27 @@ func (m *Manager) resolveSiblingModel(cfg PatchConfig, legacyRootProfile string)
 }
 
 // buildProviderSection builds the [model_providers.databricks-proxy] section body.
+//
+// supports_websockets = false is written explicitly (defensive — the serde
+// default is also false). Codex's model client prefers WebSocket transport
+// for the Responses API whenever the provider has supports_websockets =
+// true, falling back to SSE-over-HTTP only on connection failure
+// (codex-rs/core/src/client.rs:1601-1640 — stream_responses_websocket
+// then try_switch_fallback_transport). Databricks AI Gateway speaks SSE
+// over POST /v1/responses but does NOT accept WebSocket upgrades, so we
+// must keep this field off — if a stale config has it set to true, the
+// Codex GUI will WebSocket-upgrade and receive 400s from upstream until
+// the per-session fallback kicks in.
+//
+// See client.rs:798 (responses_websocket_enabled gate) and
+// model-provider-info/src/lib.rs:134-136 (the field itself).
 func (m *Manager) buildProviderSection(cfg PatchConfig) string {
 	var b strings.Builder
 	b.WriteString("name = \"Databricks Proxy\"\n")
 	b.WriteString(fmt.Sprintf("base_url = %q\n", cfg.ProxyURL))
 	b.WriteString("api_key = \"databricks-proxy\"\n")
 	b.WriteString("wire_api = \"responses\"\n")
+	b.WriteString("supports_websockets = false\n")
 	return b.String()
 }
 
@@ -316,6 +366,46 @@ func (m *Manager) stripRootKey(content, key string) string {
 		}
 	}
 	return content
+}
+
+// patchRootKey writes (or overwrites) a root-level key to the given value,
+// recording the original for Restore. If the key was absent, sentinel is
+// recorded so Restore removes the line entirely. If it was present, the
+// original line is preserved verbatim so Restore can put it back exactly.
+//
+// value is the right-hand side of the assignment — callers are responsible
+// for quoting (e.g. fmt.Sprintf("%q", "foo")).
+func (m *Manager) patchRootKey(content, key, value string) string {
+	lines := strings.Split(content, "\n")
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if isRootKey(trimmed, key) && !inAnySection(lines, i) {
+			// Only record the FIRST patch's original — subsequent
+			// patches in the same session are overwriting our own
+			// previous write, not user content. If origRootKeys
+			// already has an entry we keep it.
+			if _, seen := m.origRootKeys[key]; !seen {
+				m.origRootKeys[key] = line
+			}
+			lines[i] = fmt.Sprintf("%s = %s", key, value)
+			return strings.Join(lines, "\n")
+		}
+	}
+	// Key absent — record sentinel, prepend at top (above first section).
+	if _, seen := m.origRootKeys[key]; !seen {
+		m.origRootKeys[key] = sentinel
+	}
+	insertIdx := 0
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "[") {
+			insertIdx = i
+			break
+		}
+		insertIdx = i + 1
+	}
+	lines = insertAt(lines, insertIdx, fmt.Sprintf("%s = %s", key, value))
+	return strings.Join(lines, "\n")
 }
 
 // stripSection removes a [section] from content if present, recording the

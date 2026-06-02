@@ -84,6 +84,23 @@ func TestPatch_WritesV2Layout(t *testing.T) {
 	if !strings.Contains(sibling, `model = "databricks-gpt-5-5"`) {
 		t.Errorf("expected model in sibling, got:\n%s", sibling)
 	}
+
+	// Provider must opt OUT of WebSocket transport — Databricks AI
+	// Gateway is SSE-only over /v1/responses, no WebSocket upgrade.
+	// See buildProviderSection doc comment for the upstream code refs.
+	if !strings.Contains(content, "supports_websockets = false") {
+		t.Errorf("provider section must set supports_websockets = false (Databricks AI Gateway has no WebSocket transport), got:\n%s", content)
+	}
+
+	// Root-level model_provider + model must point at our proxy so that
+	// the Codex GUI and raw `codex` invocations (which ignore profile-v2
+	// layering — confirmed by openai/codex#13041) route through us.
+	if !strings.Contains(content, `model_provider = "databricks-proxy"`) {
+		t.Errorf("expected root-level model_provider override in base config, got:\n%s", content)
+	}
+	if !strings.Contains(content, `model = "databricks-gpt-5-5"`) {
+		t.Errorf("expected root-level model in base config, got:\n%s", content)
+	}
 }
 
 func TestPatch_PreservesUserSections(t *testing.T) {
@@ -724,6 +741,76 @@ func TestRestoreFromBackup(t *testing.T) {
 
 	if _, err := os.Stat(backupPath); !os.IsNotExist(err) {
 		t.Error("expected backup file to be removed after restore")
+	}
+}
+
+// TestRestore_PutsBackUserRootModelProvider verifies that a user's
+// pre-existing root `model_provider` and `model` keys are restored after
+// our session ends — the GUI/raw-codex fix overwrites them at session
+// start, so Restore must put them back.
+func TestRestore_PutsBackUserRootModelProvider(t *testing.T) {
+	initial := `model_provider = "openai"
+model = "gpt-5"
+
+[projects.myapp]
+trust_level = "trusted"
+`
+	m, configPath := setup(t, initial)
+
+	if err := m.Patch(PatchConfig{
+		ProxyURL: "http://127.0.0.1:9999",
+		Model:    "databricks-gpt-5-5",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// During the session: our values are active.
+	mid := readConfig(t, configPath)
+	if !strings.Contains(mid, `model_provider = "databricks-proxy"`) {
+		t.Fatalf("expected our model_provider mid-session, got:\n%s", mid)
+	}
+
+	if err := m.Restore(); err != nil {
+		t.Fatal(err)
+	}
+
+	content := readConfig(t, configPath)
+	if !strings.Contains(content, `model_provider = "openai"`) {
+		t.Errorf("expected user's model_provider to be restored, got:\n%s", content)
+	}
+	if !strings.Contains(content, `model = "gpt-5"`) {
+		t.Errorf("expected user's model to be restored, got:\n%s", content)
+	}
+	if !strings.Contains(content, "[projects.myapp]") {
+		t.Errorf("expected user section to survive, got:\n%s", content)
+	}
+}
+
+// TestRestore_RemovesAddedRootKeys verifies that root keys we added (no
+// originals) are fully removed on Restore.
+func TestRestore_RemovesAddedRootKeys(t *testing.T) {
+	initial := `[projects.myapp]
+trust_level = "trusted"
+`
+	m, configPath := setup(t, initial)
+
+	if err := m.Patch(PatchConfig{
+		ProxyURL: "http://127.0.0.1:9999",
+		Model:    "databricks-gpt-5-5",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := m.Restore(); err != nil {
+		t.Fatal(err)
+	}
+
+	content := readConfig(t, configPath)
+	if strings.Contains(content, "model_provider") {
+		t.Errorf("expected model_provider to be removed (was absent pre-patch), got:\n%s", content)
+	}
+	if strings.Contains(content, "model = ") {
+		t.Errorf("expected model to be removed (was absent pre-patch), got:\n%s", content)
 	}
 }
 
