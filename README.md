@@ -193,6 +193,41 @@ This lets the wrapper:
 - Keep Codex pointed at a stable local endpoint while upstream credentials rotate
 - Support multiple concurrent sessions — first session owns the port, others join; last session out closes the listener
 
+`~/.codex/config.toml` is **write-once**: at session start we write our managed keys and sections (root `model_provider`, root `model`, `[model_providers.databricks-proxy]`, `[otel]` when enabled) and leave them there. There's no restore-on-exit — restore was unreliable in practice (`os.Exit` skips deferred calls, panics or `SIGKILL` leave stale state behind, multi-session handoff makes "who restores" ambiguous), and the same design choice has already been validated in our sister project `databricks-claude`. All non-managed user content in `config.toml` is preserved byte-for-byte across our writes.
+
+### Transport: SSE only, no WebSocket
+
+Codex's model client prefers a **WebSocket** transport for the Responses API and only falls back to HTTP/SSE when the WebSocket handshake fails or the provider opts out. The decision is controlled by a per-provider boolean flag (`supports_websockets`, default `false`):
+
+- [`codex-rs/core/src/client.rs:1601-1640`](https://github.com/openai/codex/blob/main/codex-rs/core/src/client.rs#L1601-L1640) — `stream` method: tries WebSocket first when enabled, falls back to `stream_responses_api` (SSE) on `FallbackToHttp`.
+- [`codex-rs/core/src/client.rs:798-806`](https://github.com/openai/codex/blob/main/codex-rs/core/src/client.rs#L798-L806) — `responses_websocket_enabled` gate.
+- [`codex-rs/model-provider-info/src/lib.rs:134-136`](https://github.com/openai/codex/blob/main/codex-rs/model-provider-info/src/lib.rs#L134-L136) — the `supports_websockets` field on `ModelProviderInfo`.
+
+The Databricks AI Gateway speaks **SSE** over `POST /v1/responses` and does **not** accept WebSocket upgrade requests — a Codex client that tries to upgrade will get HTTP 400 from upstream. `databricks-codex` explicitly writes `supports_websockets = false` into `[model_providers.databricks-proxy]` to keep Codex on the SSE path. **Do not flip this to `true`** in your own edits to `~/.codex/config.toml` — the wrapper rewrites the section idempotently at every session start, but any hand-edits in between will break the next session until then.
+
+This is the same code path for **TUI, GUI, and IDE extensions** — all three frontends run `codex-core`'s `ModelClient` and respect `supports_websockets`. The decision is per-provider, not per-frontend.
+
+### Root-level `model_provider` override (GUI / raw `codex` fix)
+
+The Codex GUI and certain IDE extensions don't honor profile-v2 layering — they read `model_provider` and `model` from the **root** of `~/.codex/config.toml`, not from the active profile. Without a root-level override they fall through to the built-in `openai` provider (where `supports_websockets = true` is hardcoded) and attempt a WebSocket upgrade against whatever base URL is configured, yielding HTTP 400 from Databricks.
+
+This is confirmed by upstream [openai/codex#13041](https://github.com/openai/codex/issues/13041) — the recommended workaround is exactly a root-level provider override. `databricks-codex` now writes both:
+
+```toml
+# Root of ~/.codex/config.toml
+model_provider = "databricks-proxy"
+model          = "<resolved model>"
+
+[model_providers.databricks-proxy]
+name                = "Databricks Proxy"
+base_url            = "http://127.0.0.1:49154"
+api_key             = "databricks-proxy"
+wire_api            = "responses"
+supports_websockets = false
+```
+
+Plus the profile-v2 sibling file at `~/.codex/databricks-proxy.config.toml` for the transparent-wrapper path that passes `--profile databricks-proxy`. Both paths converge on the same provider; the root keys exist so the GUI / raw `codex` (no profile) also routes through the proxy. These writes are **permanent** — see the write-once note above. If you had a pre-existing root `model_provider` or `model` in `config.toml`, our write replaces it; restore it manually if you uninstall the wrapper.
+
 ### View full usage
 
 `databricks-codex --help` (or `-h`) prints the wrapper's own flags and exits. It does **not** append `codex --help` — mixing the two made it impossible to tell which flags belong to the wrapper vs the agent. To see codex's own help, use the `--` separator:
@@ -242,6 +277,23 @@ databricks-codex serve --idle-timeout 0
 
 The SessionStart hook installed by `databricks-codex hooks install` spawns `databricks-codex serve` under the hood — you don't need to invoke this manually for the hooks path.
 
+### Using your own codex client against `serve`
+
+When you launch `codex` (TUI, GUI, or IDE extension) yourself against a `serve`-mode proxy — instead of going through the `databricks-codex` transparent wrapper — **you must tell codex to use the `databricks-proxy` profile** so it picks up the sibling config layer (`~/.codex/databricks-proxy.config.toml`) that points at the local proxy:
+
+```bash
+# TUI / one-shot exec
+codex --profile databricks-proxy "explain this codebase"
+codex exec --profile databricks-proxy "fix the bug in main.go"
+
+# Persist as the default profile so you don't have to type it every time
+codex config set profile databricks-proxy
+```
+
+For the **Codex GUI / IDE extension**, set the active profile to `databricks-proxy` in its settings — the wrapper `databricks-codex` (transparent mode) handles this for you automatically by prepending `--profile databricks-proxy`, but standalone `codex` invocations against a `serve`-mode proxy don't.
+
+> **Why:** Codex's profile-v2 layout (released 2026) requires the proxy config to live in a sibling file (`<profile>.config.toml`) selected by `--profile`, rather than as a root `profile = "..."` key in base `config.toml`. The transparent wrapper injects this flag; `serve` mode cannot, because it doesn't launch codex.
+
 ## `hooks` Subcommand
 
 Install hooks so every Codex session auto-starts the proxy on startup — no manual `databricks-codex serve` needed. Replaces the legacy root flags (`--install-hooks` / `--uninstall-hooks` / `--headless-ensure`), which were removed in v0.12.
@@ -281,6 +333,7 @@ Removes only the databricks-codex hook entries. Other hooks in your `hooks.json`
 - Safe to rerun `hooks install` after upgrades — existing hooks are replaced, not duplicated.
 - Custom port settings persist automatically via the state file (`~/.codex/.databricks-codex.json`).
 - `hooks session-start` is wired by `hooks install` for you; running it manually is a no-op when the proxy is already up.
+- **Codex profile selection:** the SessionStart hook only spawns the proxy — your codex client (TUI/GUI/extension) still needs to use the `databricks-proxy` profile to route through it. See [Using your own codex client against `serve`](#using-your-own-codex-client-against-serve) above. The simplest setup is `codex config set profile databricks-proxy` once, then plain `codex` always uses the proxy.
 
 ## Shell Tab Completions
 
