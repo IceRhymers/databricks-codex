@@ -193,6 +193,8 @@ This lets the wrapper:
 - Keep Codex pointed at a stable local endpoint while upstream credentials rotate
 - Support multiple concurrent sessions — first session owns the port, others join; last session out closes the listener
 
+`~/.codex/config.toml` is **write-once**: at session start we write our managed keys and sections (root `model_provider`, root `model`, `[model_providers.databricks-proxy]`, `[otel]` when enabled) and leave them there. There's no restore-on-exit — restore was unreliable in practice (`os.Exit` skips deferred calls, panics or `SIGKILL` leave stale state behind, multi-session handoff makes "who restores" ambiguous), and the same design choice has already been validated in our sister project `databricks-claude`. All non-managed user content in `config.toml` is preserved byte-for-byte across our writes.
+
 ### Transport: SSE only, no WebSocket
 
 Codex's model client prefers a **WebSocket** transport for the Responses API and only falls back to HTTP/SSE when the WebSocket handshake fails or the provider opts out. The decision is controlled by a per-provider boolean flag (`supports_websockets`, default `false`):
@@ -224,7 +226,7 @@ wire_api            = "responses"
 supports_websockets = false
 ```
 
-Plus the profile-v2 sibling file at `~/.codex/databricks-proxy.config.toml` for the transparent-wrapper path that passes `--profile databricks-proxy`. Both paths converge on the same provider; the root keys exist so the GUI / raw `codex` (no profile) also routes through the proxy. Your original `model_provider` and `model` values are saved on Backup and restored on session exit.
+Plus the profile-v2 sibling file at `~/.codex/databricks-proxy.config.toml` for the transparent-wrapper path that passes `--profile databricks-proxy`. Both paths converge on the same provider; the root keys exist so the GUI / raw `codex` (no profile) also routes through the proxy. These writes are **permanent** — see the write-once note above. If you had a pre-existing root `model_provider` or `model` in `config.toml`, our write replaces it; restore it manually if you uninstall the wrapper.
 
 ### View full usage
 

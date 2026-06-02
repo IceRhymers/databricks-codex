@@ -33,6 +33,10 @@ func NewConfigManager() *ConfigManager {
 // managed keys and additive for new ones — so calling EnsureConfig with
 // the same proxy URL but different OTEL endpoints will correctly add or
 // update the `[otel]` section without disturbing user content.
+//
+// Write-once semantics: there is no Backup/Restore round-trip. Our
+// managed keys/sections live in config.toml until they're explicitly
+// removed (e.g. by a future `databricks-codex uninstall`).
 func (cm *ConfigManager) EnsureConfig(proxyURL, model string, modelExplicit bool, otelLogsEndpoint, otelMetricsEndpoint string) error {
 	cm.mu.Lock()
 	defer cm.mu.Unlock()
@@ -47,8 +51,10 @@ func (cm *ConfigManager) EnsureConfig(proxyURL, model string, modelExplicit bool
 		return err
 	}
 
-	// Clean up any stale backup from pre-v0.6.0 crash recovery.
+	// Clean up any stale backup from pre-v0.6.0 / pre-v2.0.0 installs
+	// that used the Backup/Restore round-trip.
 	os.Remove(cm.config.ConfigPath() + ".databricks-codex-backup")
+	os.Remove(cm.config.SiblingPath() + ".databricks-codex-backup")
 
 	log.Printf("databricks-codex: ensured config.toml (proxy: %s)", proxyURL)
 	return nil

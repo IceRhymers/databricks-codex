@@ -2,29 +2,51 @@
 // It uses simple string-based manipulation rather than a full TOML parser,
 // keeping the zero-external-dependency constraint.
 //
-// Layout (Codex profile-v2):
+// Write-once semantics
+// ====================
 //
-//   ~/.codex/config.toml              — base user config. We own
-//                                       [model_providers.databricks-proxy]
-//                                       and [otel] here. Anything else
-//                                       (including a user-owned root
-//                                       `profile` key) is preserved
-//                                       byte-for-byte across Restore.
+// This package implements a write-once model: Patch() is idempotent and
+// final. There is NO Backup/Restore round-trip. The proxy lifecycle does
+// not own the user's config.toml across sessions — once we write it, our
+// managed keys/sections stay (re-emitted at every session start), and
+// non-managed user content is preserved byte-for-byte.
+//
+// Rationale: restore-on-exit was unreliable in practice (os.Exit skips
+// deferred calls, panics or SIGKILL leave the user with a stale config,
+// multi-session handoff races make "who restores" ambiguous). The same
+// pattern in databricks-claude was already write-once for the same
+// reason. Users who want to remove our managed keys can do so manually
+// or by uninstalling the wrapper — we do not silently revert their
+// config behind their back.
+//
+// Layout (Codex profile-v2 + GUI root-key fix)
+// ============================================
+//
+//   ~/.codex/config.toml              — base user config. We own:
+//                                       - root `model_provider`
+//                                       - root `model`
+//                                       - [model_providers.databricks-proxy]
+//                                       - [otel]
+//                                       Anything else (including a
+//                                       user-owned root `profile` key)
+//                                       is preserved byte-for-byte.
 //   ~/.codex/databricks-proxy.config.toml — profile-v2 sibling file. We
 //                                       own this file entirely. Contains
 //                                       `model_provider` and (when set)
 //                                       `model`. Codex is launched with
 //                                       `--profile databricks-proxy` so
 //                                       this layer is merged on top of
-//                                       base.
+//                                       base for the transparent-wrapper
+//                                       path; the GUI and raw `codex`
+//                                       use the root keys instead
+//                                       (openai/codex#13041).
 //
 // Pre-v0.7 layouts that wrote `profile = "databricks-proxy"` and
 // `[profiles.databricks-proxy]` into base config.toml are rejected by
 // current Codex (see https://developers.openai.com/codex/config-advanced#profiles).
-// Patch() strips any leftover legacy keys from the user's base config and
-// migrates the model value forward into the sibling file. Restore() puts
-// the original legacy keys back so a session run by an older
-// databricks-codex still finds what it expects.
+// Patch() strips any leftover legacy keys from the user's base config
+// and migrates the model value forward into the sibling file. Stripping
+// is one-way — the legacy keys do not come back.
 package tomlconfig
 
 import (
@@ -48,27 +70,11 @@ type PatchConfig struct {
 // also the basename of the sibling file (`<name>.config.toml`).
 const SiblingProfileName = "databricks-proxy"
 
-// sentinel is stored in originals when a key/section was absent before patching.
-const sentinel = "\x00nil"
-
-// Manager reads, patches, and restores the Codex config.toml file.
+// Manager reads and patches the Codex config.toml file plus the
+// profile-v2 sibling file. Write-once — no backup, no restore.
 type Manager struct {
 	configPath  string
-	backupPath  string
 	siblingPath string // ~/.codex/databricks-proxy.config.toml
-	siblingBak  string // sibling backup path for crash recovery
-	original    []byte // saved original config.toml content for crash-recovery backup
-
-	// Surgical restore state: tracks what we changed so Restore only undoes
-	// what we touched. Keys map to original line/block content, or sentinel
-	// if the key/section was absent before patching.
-	origRootKeys    map[string]string // root key name -> original line or sentinel
-	origSections    map[string]string // section header (e.g. "profiles.databricks-proxy") -> original block or sentinel
-	patchedModelVal string            // model value we wrote into the sibling file
-
-	// Sibling-file restore state.
-	siblingOriginal []byte // saved content if sibling file existed pre-patch
-	siblingExisted  bool   // true if the sibling file existed pre-patch
 }
 
 // NewManager creates a new config.toml manager.
@@ -83,66 +89,23 @@ func NewManager(configPath string) *Manager {
 			configPath = filepath.Join(home, ".codex", "config.toml")
 		}
 	}
-	siblingPath := filepath.Join(filepath.Dir(configPath), SiblingProfileName+".config.toml")
 	return &Manager{
-		configPath:   configPath,
-		backupPath:   configPath + ".databricks-codex-backup",
-		siblingPath:  siblingPath,
-		siblingBak:   siblingPath + ".databricks-codex-backup",
-		origRootKeys: make(map[string]string),
-		origSections: make(map[string]string),
+		configPath:  configPath,
+		siblingPath: filepath.Join(filepath.Dir(configPath), SiblingProfileName+".config.toml"),
 	}
 }
 
 // ConfigPath returns the path to config.toml.
-func (m *Manager) ConfigPath() string {
-	return m.configPath
-}
+func (m *Manager) ConfigPath() string { return m.configPath }
 
 // SiblingPath returns the path to the profile-v2 sibling file.
-func (m *Manager) SiblingPath() string {
-	return m.siblingPath
-}
+func (m *Manager) SiblingPath() string { return m.siblingPath }
 
-// Backup reads the current config.toml (and the sibling file, if any) and
-// saves the original content both in memory and to backup files for crash
-// recovery.
-func (m *Manager) Backup() error {
-	data, err := os.ReadFile(m.configPath)
-	if err != nil {
-		if !os.IsNotExist(err) {
-			return fmt.Errorf("read config.toml: %w", err)
-		}
-		m.original = nil
-	} else {
-		m.original = data
-		if err := atomicWrite(m.backupPath, data); err != nil {
-			return fmt.Errorf("write backup: %w", err)
-		}
-	}
-
-	sdata, err := os.ReadFile(m.siblingPath)
-	if err != nil {
-		if !os.IsNotExist(err) {
-			return fmt.Errorf("read sibling config: %w", err)
-		}
-		m.siblingOriginal = nil
-		m.siblingExisted = false
-	} else {
-		m.siblingOriginal = sdata
-		m.siblingExisted = true
-		if err := atomicWrite(m.siblingBak, sdata); err != nil {
-			return fmt.Errorf("write sibling backup: %w", err)
-		}
-	}
-	return nil
-}
-
-// managedSections lists section headers we manage in base config.toml.
+// managedSections lists section headers we own in base config.toml.
 // [profiles.databricks-proxy] is intentionally NOT here: under Codex
-// profile-v2 it lives in the sibling file. We still STRIP a legacy
-// [profiles.databricks-proxy] from base config (recording the original
-// for Restore) so old installs migrate forward cleanly.
+// profile-v2 it lives in the sibling file. Patch() STRIPS a legacy
+// [profiles.databricks-proxy] from base config (one-way migration) so
+// old installs become valid profile-v2 configs.
 var managedSections = []string{
 	"model_providers.databricks-proxy",
 	"otel",
@@ -167,140 +130,108 @@ var managedSections = []string{
 //     same values.
 //
 // We do NOT write a root `profile = "..."` key — Codex profile-v2 rejects
-// that (codex-rs/core/src/config/mod.rs:2606) and stripping it on Patch
-// is the migration path for users upgrading from pre-v0.7.
+// that (codex-rs/core/src/config/mod.rs:2606). Stripping it on Patch is
+// the migration path for users upgrading from pre-v0.7.
 var managedRootKeys = []string{"model_provider", "model"}
 
-// Patch performs surgical patching of config.toml: it reads the existing file,
-// saves originals for keys/sections it will touch, then injects/updates only
-// managed keys and sections. All non-managed content is preserved byte-for-byte.
-//
-// It also writes (overwriting any existing content) the profile-v2 sibling
-// file with model_provider + model.
+// Patch is the idempotent write-once entry point. It reads the current
+// config.toml (if any), strips legacy v1 keys we own, writes our root
+// keys + provider + otel sections, and overwrites the sibling file. All
+// non-managed user content is preserved byte-for-byte.
 func (m *Manager) Patch(cfg PatchConfig) error {
 	content := ""
-	if m.original != nil {
-		content = string(m.original)
-	} else if data, err := os.ReadFile(m.configPath); err == nil {
+	if data, err := os.ReadFile(m.configPath); err == nil {
 		content = string(data)
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("read config.toml: %w", err)
 	}
 
 	// --- Strip legacy v1 leftovers from base config.toml ---
 	//
 	// Codex profile-v2 rejects ANY root `profile = ...` key whenever the
 	// merged config has one (codex-rs/core/src/config/mod.rs:2606), and
-	// also rejects a [profiles.X] table in base config when --profile X is
-	// active (codex-rs/config/src/loader/mod.rs:240). Strip both here so
-	// that launching codex with --profile databricks-proxy succeeds. The
-	// originals are recorded via the existing tracking so Restore() puts
-	// them back when our session ends.
+	// also rejects a [profiles.X] table in base config when --profile X
+	// is active (codex-rs/config/src/loader/mod.rs:240). Strip both so
+	// the GUI/TUI/IDE all load successfully. This is a one-way
+	// migration — the legacy keys are not put back.
 	rootProfileVal := findRootProfileValue(content)
 	if rootProfileVal == SiblingProfileName {
 		// Only strip our own legacy key. A user's unrelated
 		// `profile = "myprofile"` is left alone — codex profile-v2
 		// rejects it independently and that's a pre-existing
 		// condition, not something we should silently overwrite.
-		content = m.stripRootKey(content, "profile")
+		content = stripRootKey(content, "profile")
 	}
-	content = m.stripSection(content, "profiles.databricks-proxy")
+	content = stripSection(content, "profiles.databricks-proxy")
 
 	// --- Root-level provider override (fixes GUI / raw codex paths) ---
-	//
-	// See managedRootKeys doc above. Root model_provider points at our
-	// proxy provider; root model is the resolved value (same as what we
-	// put in the sibling file). On Restore, the user's original root
-	// model/model_provider come back via origRootKeys.
-	content = m.patchRootKey(content, "model_provider", fmt.Sprintf("%q", SiblingProfileName))
-	rootModel := m.resolveSiblingModel(cfg, rootProfileVal)
-	if rootModel != "" {
-		content = m.patchRootKey(content, "model", fmt.Sprintf("%q", rootModel))
+	content = setRootKey(content, "model_provider", fmt.Sprintf("%q", SiblingProfileName))
+	resolvedModel := m.resolveModel(cfg, content)
+	if resolvedModel != "" {
+		content = setRootKey(content, "model", fmt.Sprintf("%q", resolvedModel))
 	}
 
-	// --- Sections we still own in base config.toml ---
-	content = m.patchSection(content, "model_providers.databricks-proxy",
+	// --- Sections we own in base config.toml ---
+	content = setSection(content, "model_providers.databricks-proxy",
 		m.buildProviderSection(cfg))
 
-	// Always handle the [otel] section: when both endpoints are set, patch
-	// it; when both are empty, remove it if it exists. This makes --no-otel
-	// (or --no-otel-metrics/--no-otel-logs that clears the last remaining
-	// signal) actually erase the section from config.toml — not just leave
-	// stale exporter lines behind.
+	// Always handle the [otel] section: when both endpoints are set,
+	// write it; when both are empty, remove it. This makes --no-otel
+	// actually erase the section from config.toml — not leave stale
+	// exporter lines behind.
 	if cfg.OTELLogsEndpoint != "" || cfg.OTELMetricsEndpoint != "" {
-		content = m.patchSection(content, "otel",
-			m.buildOTELSection(cfg))
+		content = setSection(content, "otel", m.buildOTELSection(cfg))
 	} else {
-		content = m.removeSection(content, "otel")
+		content = removeSection(content, "otel")
 	}
 
 	if err := atomicWrite(m.configPath, []byte(content)); err != nil {
-		return fmt.Errorf("write patched config.toml: %w", err)
+		return fmt.Errorf("write config.toml: %w", err)
 	}
 
-	// --- Write the profile-v2 sibling file ---
-	siblingContent := m.buildSiblingFile(cfg, rootProfileVal)
-	if err := atomicWrite(m.siblingPath, []byte(siblingContent)); err != nil {
+	// --- Write the profile-v2 sibling file (overwrite) ---
+	if err := atomicWrite(m.siblingPath, []byte(m.buildSiblingFile(resolvedModel))); err != nil {
 		return fmt.Errorf("write sibling config: %w", err)
 	}
 	return nil
 }
 
-// buildSiblingFile renders the profile-v2 layer file. Resolution chain for
-// the `model` value (mirrors pre-v0.7 buildProfileSection semantics, just
-// targeted at the sibling file):
+// resolveModel applies the model-value resolution chain. content is the
+// current base config.toml (post-strip) used to look up a root-level
+// model line. The sibling file is checked first so a user-edited or
+// previously-written value wins over our resolved default.
 //
-//  1. existing sibling file's `model = ...` (preserve user-set value)
-//  2. legacy `[profiles.databricks-proxy] model = ...` from base config
-//     (migrate forward when upgrading from pre-v0.7)
-//  3. explicit --model flag value
-//  4. root-level `model = ...` in the original base config
-//  5. resolved fallback (cfg.Model) — only if non-empty
+// Chain:
 //
-// legacyRootProfile is the value of the legacy root `profile = "X"` key in
-// base config.toml at Backup time, if any. Today only legacyRootProfile ==
-// "databricks-proxy" is interesting (it means a prior databricks-codex run
-// wrote it and we should ignore any cargo model lookup that depends on it).
-func (m *Manager) buildSiblingFile(cfg PatchConfig, legacyRootProfile string) string {
-	var b strings.Builder
-	b.WriteString("# Managed by databricks-codex. Do not edit by hand.\n")
-	b.WriteString("# See https://developers.openai.com/codex/config-advanced#profiles\n")
-	b.WriteString("model_provider = \"databricks-proxy\"\n")
-
-	model := m.resolveSiblingModel(cfg, legacyRootProfile)
-	if model != "" {
-		b.WriteString(fmt.Sprintf("model = %q\n", model))
-		m.patchedModelVal = model
-	}
-	return b.String()
-}
-
-// resolveSiblingModel applies the model-value resolution chain. Pure func
-// (apart from reading m.siblingOriginal / m.original which are captured at
-// Backup time).
-func (m *Manager) resolveSiblingModel(cfg PatchConfig, legacyRootProfile string) string {
-	_ = legacyRootProfile // reserved for future migration heuristics
-
+//	1. existing sibling file's `model = ...` (preserve user-set value)
+//	2. legacy `[profiles.databricks-proxy] model = ...` from a
+//	   pre-strip snapshot of base config (one-time migration)
+//	3. explicit --model flag value (cfg.ModelExplicit)
+//	4. root-level `model = ...` already in base config
+//	5. resolved fallback (cfg.Model) — only if non-empty
+func (m *Manager) resolveModel(cfg PatchConfig, currentBase string) string {
 	if cfg.ModelExplicit {
 		return cfg.Model
 	}
 
-	// 1. Preserve a model already in the sibling file (user may have
-	//    edited it, or a prior session wrote it).
-	if existing := findRootModelInString(string(m.siblingOriginal)); existing != "" {
-		return existing
+	// 1. Sibling file's existing model.
+	if sdata, err := os.ReadFile(m.siblingPath); err == nil {
+		if existing := findRootModelInString(string(sdata)); existing != "" {
+			return existing
+		}
 	}
 
-	// 2. Migrate a model from the legacy [profiles.databricks-proxy]
-	//    section in base config.toml, if a prior databricks-codex left
-	//    one behind.
-	if legacyModel := findModelInSectionString(string(m.original), "profiles.databricks-proxy"); legacyModel != "" {
-		return legacyModel
+	// 2. Legacy section migration: re-read the file from disk so we
+	//    see the [profiles.databricks-proxy] block before we stripped
+	//    it. currentBase has already had it removed.
+	if odata, err := os.ReadFile(m.configPath); err == nil {
+		if legacyModel := findModelInSectionString(string(odata), "profiles.databricks-proxy"); legacyModel != "" {
+			return legacyModel
+		}
 	}
 
-	// 3. Carry forward a root-level model from base config.toml. Under
-	//    profile-v2 layering this would already be visible without us
-	//    writing it, but echoing it into the sibling makes the active
-	//    layer self-describing and matches pre-v0.7 behaviour.
-	if rootModel := findRootModelInString(string(m.original)); rootModel != "" {
+	// 3. Root-level model in current base config.
+	if rootModel := findRootModelInString(currentBase); rootModel != "" {
 		return rootModel
 	}
 
@@ -308,7 +239,20 @@ func (m *Manager) resolveSiblingModel(cfg PatchConfig, legacyRootProfile string)
 	return cfg.Model
 }
 
-// buildProviderSection builds the [model_providers.databricks-proxy] section body.
+// buildSiblingFile renders the profile-v2 layer file. Caller resolves the
+// model value; passing "" omits the model line entirely.
+func (m *Manager) buildSiblingFile(model string) string {
+	var b strings.Builder
+	b.WriteString("# Managed by databricks-codex. Do not edit by hand.\n")
+	b.WriteString("# See https://developers.openai.com/codex/config-advanced#profiles\n")
+	b.WriteString("model_provider = \"databricks-proxy\"\n")
+	if model != "" {
+		b.WriteString(fmt.Sprintf("model = %q\n", model))
+	}
+	return b.String()
+}
+
+// buildProviderSection builds the [model_providers.databricks-proxy] body.
 //
 // supports_websockets = false is written explicitly (defensive — the serde
 // default is also false). Codex's model client prefers WebSocket transport
@@ -334,13 +278,11 @@ func (m *Manager) buildProviderSection(cfg PatchConfig) string {
 }
 
 // buildOTELSection builds the [otel] section body.
-// Emits `exporter` (logs) and/or `metrics_exporter` for whichever endpoints
-// are non-empty. Both can coexist in the same [otel] block.
 //
 // Note: Codex's upstream `metrics_exporter` default is Statsig
-// (https://ab.chatgpt.com/otlp/v1/metrics). We do NOT defensively rewrite
-// this at the proxy layer; setting `metrics_exporter` here is the user's
-// explicit opt-in to route metrics through Databricks instead.
+// (https://ab.chatgpt.com/otlp/v1/metrics). We do NOT defensively
+// rewrite this at the proxy layer; setting `metrics_exporter` here is
+// the user's explicit opt-in to route metrics through Databricks.
 func (m *Manager) buildOTELSection(cfg PatchConfig) string {
 	var b strings.Builder
 	b.WriteString("environment = \"production\"\n")
@@ -353,47 +295,52 @@ func (m *Manager) buildOTELSection(cfg PatchConfig) string {
 	return b.String()
 }
 
-// stripRootKey removes a root-level key if present, recording the original
-// line so Restore can put it back. If the key is absent, no tracking and
-// no mutation.
-func (m *Manager) stripRootKey(content, key string) string {
-	lines := strings.Split(content, "\n")
+// UpdateProxyURL updates only the base_url in the provider section.
+// Used for multi-session handoff when an owner session ends and a
+// survivor rebinds the port: the proxy URL changes, but everything
+// else stays.
+func (m *Manager) UpdateProxyURL(newURL string) error {
+	data, err := os.ReadFile(m.configPath)
+	if err != nil {
+		return fmt.Errorf("read config.toml: %w", err)
+	}
+	lines := strings.Split(string(data), "\n")
+	inSection := false
 	for i, line := range lines {
 		trimmed := strings.TrimSpace(line)
-		if isRootKey(trimmed, key) && !inAnySection(lines, i) {
-			m.origRootKeys[key] = line
-			return strings.Join(removeAt(lines, i), "\n")
+		if trimmed == "[model_providers.databricks-proxy]" {
+			inSection = true
+			continue
+		}
+		if inSection {
+			if strings.HasPrefix(trimmed, "[") {
+				break
+			}
+			if strings.HasPrefix(trimmed, "base_url") {
+				lines[i] = fmt.Sprintf("base_url = %q", newURL)
+				break
+			}
 		}
 	}
-	return content
+	return atomicWrite(m.configPath, []byte(strings.Join(lines, "\n")))
 }
 
-// patchRootKey writes (or overwrites) a root-level key to the given value,
-// recording the original for Restore. If the key was absent, sentinel is
-// recorded so Restore removes the line entirely. If it was present, the
-// original line is preserved verbatim so Restore can put it back exactly.
+// --- Pure string helpers (no Manager state) ---
+
+// setRootKey writes (or overwrites) a root-level key to the given value.
+// Pure write, no tracking. If the key was absent, the new line is
+// prepended above the first section header.
 //
 // value is the right-hand side of the assignment — callers are responsible
 // for quoting (e.g. fmt.Sprintf("%q", "foo")).
-func (m *Manager) patchRootKey(content, key, value string) string {
+func setRootKey(content, key, value string) string {
 	lines := strings.Split(content, "\n")
 	for i, line := range lines {
 		trimmed := strings.TrimSpace(line)
 		if isRootKey(trimmed, key) && !inAnySection(lines, i) {
-			// Only record the FIRST patch's original — subsequent
-			// patches in the same session are overwriting our own
-			// previous write, not user content. If origRootKeys
-			// already has an entry we keep it.
-			if _, seen := m.origRootKeys[key]; !seen {
-				m.origRootKeys[key] = line
-			}
 			lines[i] = fmt.Sprintf("%s = %s", key, value)
 			return strings.Join(lines, "\n")
 		}
-	}
-	// Key absent — record sentinel, prepend at top (above first section).
-	if _, seen := m.origRootKeys[key]; !seen {
-		m.origRootKeys[key] = sentinel
 	}
 	insertIdx := 0
 	for i, line := range lines {
@@ -408,10 +355,22 @@ func (m *Manager) patchRootKey(content, key, value string) string {
 	return strings.Join(lines, "\n")
 }
 
-// stripSection removes a [section] from content if present, recording the
-// original block so Restore can put it back. If the section is absent, no
-// tracking and no mutation.
-func (m *Manager) stripSection(content, sectionName string) string {
+// stripRootKey removes a root-level key if present. No-op if absent.
+func stripRootKey(content, key string) string {
+	lines := strings.Split(content, "\n")
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if isRootKey(trimmed, key) && !inAnySection(lines, i) {
+			return strings.Join(removeAt(lines, i), "\n")
+		}
+	}
+	return content
+}
+
+// stripSection removes a [section] block if present. No-op if absent.
+// Also removes a blank line on either side of the removed block so we
+// don't leave a double-blank gap.
+func stripSection(content, sectionName string) string {
 	header := "[" + sectionName + "]"
 	lines := strings.Split(content, "\n")
 	startIdx := -1
@@ -432,12 +391,8 @@ func (m *Manager) stripSection(content, sectionName string) string {
 			break
 		}
 	}
-	m.origSections[sectionName] = strings.Join(lines[startIdx:endIdx], "\n")
-
-	// Drop a trailing blank line that typically separates sections so
-	// removing a mid-file section doesn't leave a double-blank gap.
 	if endIdx < len(lines) && strings.TrimSpace(lines[endIdx-1]) == "" {
-		// blank already part of the section we're dropping
+		// blank inside the block being removed — no-op
 	} else if endIdx < len(lines) && strings.TrimSpace(lines[endIdx]) == "" {
 		endIdx++
 	}
@@ -450,72 +405,18 @@ func (m *Manager) stripSection(content, sectionName string) string {
 	return strings.Join(newLines, "\n")
 }
 
-// removeSection finds a [section] in the content and removes it entirely
-// (header + body up to the next section header or EOF). The original block
-// is recorded in origSections so Restore() can put it back.
-//
-// If the section is not present, this is a no-op — and crucially, we do
-// NOT record a sentinel, because there's nothing to undo on Restore().
-func (m *Manager) removeSection(content, sectionName string) string {
-	header := "[" + sectionName + "]"
-	lines := strings.Split(content, "\n")
-
-	startIdx := -1
-	for i, line := range lines {
-		if strings.TrimSpace(line) == header {
-			startIdx = i
-			break
-		}
-	}
-
-	if startIdx == -1 {
-		// Section absent — nothing to remove, nothing to track.
-		return content
-	}
-
-	// Find section end (next section header or EOF).
-	endIdx := len(lines)
-	for i := startIdx + 1; i < len(lines); i++ {
-		trimmed := strings.TrimSpace(lines[i])
-		if strings.HasPrefix(trimmed, "[") && !strings.HasPrefix(trimmed, "[[") {
-			endIdx = i
-			break
-		}
-	}
-
-	// Save original block so Restore() can put it back if needed.
-	m.origSections[sectionName] = strings.Join(lines[startIdx:endIdx], "\n")
-
-	// Also drop the trailing blank line that typically separates sections,
-	// so removing [otel] doesn't leave a double-blank gap behind. Only do
-	// this if endIdx is followed by a blank line (i.e. we're removing a
-	// mid-file section, not a trailing one).
-	if endIdx < len(lines) && strings.TrimSpace(lines[endIdx-1]) == "" {
-		// endIdx-1 is already a blank line inside the section we're
-		// removing — nothing extra to do.
-	} else if endIdx < len(lines) && strings.TrimSpace(lines[endIdx]) == "" {
-		// The line right after the section is blank — consume it.
-		endIdx++
-	}
-	// Also drop a blank line immediately BEFORE the section if present,
-	// so we don't leave a dangling separator.
-	if startIdx > 0 && strings.TrimSpace(lines[startIdx-1]) == "" {
-		startIdx--
-	}
-
-	newLines := make([]string, 0, len(lines))
-	newLines = append(newLines, lines[:startIdx]...)
-	newLines = append(newLines, lines[endIdx:]...)
-
-	return strings.Join(newLines, "\n")
+// removeSection is a thin alias for stripSection, kept distinct only for
+// callsite-readability where we mean "user said disable, not migration".
+func removeSection(content, sectionName string) string {
+	return stripSection(content, sectionName)
 }
 
-// patchSection finds a [section] in the content, saves its original block,
-// and replaces or appends the managed section.
-func (m *Manager) patchSection(content, sectionName, body string) string {
+// setSection writes (or overwrites) a [section] with the given body.
+// Pure write, no tracking. If absent, appended at end with a leading
+// blank-line separator.
+func setSection(content, sectionName, body string) string {
 	header := "[" + sectionName + "]"
 	lines := strings.Split(content, "\n")
-
 	startIdx := -1
 	for i, line := range lines {
 		if strings.TrimSpace(line) == header {
@@ -523,22 +424,15 @@ func (m *Manager) patchSection(content, sectionName, body string) string {
 			break
 		}
 	}
-
 	if startIdx == -1 {
-		// Section absent — record sentinel, append.
-		m.origSections[sectionName] = sentinel
 		var sb strings.Builder
 		sb.WriteString(header + "\n")
 		sb.WriteString(body)
-		// Ensure content ends with newline before appending.
 		if !strings.HasSuffix(content, "\n") && content != "" {
 			content += "\n"
 		}
-		content += "\n" + sb.String()
-		return content
+		return content + "\n" + sb.String()
 	}
-
-	// Find section end (next section header or EOF).
 	endIdx := len(lines)
 	for i := startIdx + 1; i < len(lines); i++ {
 		trimmed := strings.TrimSpace(lines[i])
@@ -547,12 +441,6 @@ func (m *Manager) patchSection(content, sectionName, body string) string {
 			break
 		}
 	}
-
-	// Save original block.
-	origBlock := strings.Join(lines[startIdx:endIdx], "\n")
-	m.origSections[sectionName] = origBlock
-
-	// Build replacement.
 	var replacement []string
 	replacement = append(replacement, header)
 	for _, line := range strings.Split(body, "\n") {
@@ -560,13 +448,10 @@ func (m *Manager) patchSection(content, sectionName, body string) string {
 			replacement = append(replacement, line)
 		}
 	}
-
-	// Replace the section block.
 	newLines := make([]string, 0, len(lines))
 	newLines = append(newLines, lines[:startIdx]...)
 	newLines = append(newLines, replacement...)
 	newLines = append(newLines, lines[endIdx:]...)
-
 	return strings.Join(newLines, "\n")
 }
 
@@ -589,7 +474,7 @@ func findRootProfileValue(content string) string {
 }
 
 // findRootModelInString returns the value of a root-level `model = ...`
-// line (not inside any section). Returns empty string if not found.
+// line (not inside any section). Returns "" if not found.
 func findRootModelInString(content string) string {
 	if content == "" {
 		return ""
@@ -610,7 +495,7 @@ func findRootModelInString(content string) string {
 }
 
 // findModelInSectionString looks for a `model = ...` line inside a named
-// section, returning the *value* (not the full line). Empty if not found.
+// section, returning the *value*. Empty if not found.
 func findModelInSectionString(content, sectionName string) string {
 	if content == "" {
 		return ""
@@ -645,245 +530,12 @@ func findModelInSectionString(content, sectionName string) string {
 	return ""
 }
 
-// Restore performs surgical restoration: only removes/restores keys and sections
-// that we patched. Non-managed content is untouched.
-func (m *Manager) Restore() error {
-	// Restore the sibling file first — independent of base config.toml.
-	if err := m.restoreSiblingFile(); err != nil {
-		return err
-	}
-
-	// If we never had an original file and we added everything, remove the file.
-	if m.original == nil && allSentinels(m.origRootKeys) && allSentinels(m.origSections) {
-		os.Remove(m.configPath)
-		os.Remove(m.backupPath)
-		return nil
-	}
-
-	data, err := os.ReadFile(m.configPath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			os.Remove(m.backupPath)
-			return nil
-		}
-		return fmt.Errorf("read config.toml for restore: %w", err)
-	}
-	content := string(data)
-
-	// Restore root keys.
-	for key, orig := range m.origRootKeys {
-		content = m.restoreRootKey(content, key, orig)
-	}
-
-	// Restore sections.
-	for sectionName, orig := range m.origSections {
-		content = m.restoreSection(content, sectionName, orig)
-	}
-
-	// Clean up trailing whitespace.
-	content = strings.TrimRight(content, "\n") + "\n"
-
-	if err := atomicWrite(m.configPath, []byte(content)); err != nil {
-		return fmt.Errorf("restore config.toml: %w", err)
-	}
-	os.Remove(m.backupPath)
-	return nil
-}
-
-// restoreSiblingFile restores the sibling profile-v2 file to its pre-patch
-// state: either rewriting the original contents, or removing the file we
-// created.
-func (m *Manager) restoreSiblingFile() error {
-	if m.siblingExisted {
-		if err := atomicWrite(m.siblingPath, m.siblingOriginal); err != nil {
-			return fmt.Errorf("restore sibling config: %w", err)
-		}
-	} else {
-		if err := os.Remove(m.siblingPath); err != nil && !os.IsNotExist(err) {
-			return fmt.Errorf("remove sibling config: %w", err)
-		}
-	}
-	if err := os.Remove(m.siblingBak); err != nil && !os.IsNotExist(err) {
-		// Backup cleanup failure isn't fatal — log and continue.
-		log.Printf("databricks-codex: failed to remove sibling backup: %v", err)
-	}
-	return nil
-}
-
-// restoreRootKey restores a single root key to its original state.
-func (m *Manager) restoreRootKey(content, key, orig string) string {
-	if orig == sentinel {
-		// Was absent — strip whatever's there now.
-		lines := strings.Split(content, "\n")
-		for i, line := range lines {
-			trimmed := strings.TrimSpace(line)
-			if isRootKey(trimmed, key) && !inAnySection(lines, i) {
-				return strings.Join(removeAt(lines, i), "\n")
-			}
-		}
-		return content
-	}
-
-	// Was present pre-patch — put the original line back. Two cases:
-	//   (a) the current content still has the key (e.g. an unrelated edit
-	//       left it intact): replace in place.
-	//   (b) the current content does NOT have the key (we stripped it in
-	//       Patch): re-insert near the top.
-	lines := strings.Split(content, "\n")
-	for i, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if isRootKey(trimmed, key) && !inAnySection(lines, i) {
-			lines[i] = orig
-			return strings.Join(lines, "\n")
-		}
-	}
-	insertIdx := 0
-	for i, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "[") {
-			insertIdx = i
-			break
-		}
-		insertIdx = i + 1
-	}
-	lines = insertAt(lines, insertIdx, orig)
-	return strings.Join(lines, "\n")
-}
-
-// restoreSection restores a section to its original state.
-func (m *Manager) restoreSection(content, sectionName, orig string) string {
-	header := "[" + sectionName + "]"
-	lines := strings.Split(content, "\n")
-
-	startIdx := -1
-	for i, line := range lines {
-		if strings.TrimSpace(line) == header {
-			startIdx = i
-			break
-		}
-	}
-
-	// Helper: rebuild the lines slice with `replacement` (slice or nil for
-	// pure deletion) replacing [startIdx..endIdx).
-	splice := func(start, end int, replacement []string) string {
-		newLines := make([]string, 0, len(lines)-(end-start)+len(replacement))
-		newLines = append(newLines, lines[:start]...)
-		newLines = append(newLines, replacement...)
-		newLines = append(newLines, lines[end:]...)
-		return strings.Join(newLines, "\n")
-	}
-
-	if startIdx == -1 {
-		// Section is absent from current content. If orig was a sentinel
-		// (it didn't exist pre-patch either), nothing to do. Otherwise we
-		// need to re-add it (we stripped it during Patch). Append at end.
-		if orig == sentinel {
-			return content
-		}
-		// Ensure trailing newline before append.
-		if !strings.HasSuffix(content, "\n") && content != "" {
-			content += "\n"
-		}
-		return content + "\n" + orig + "\n"
-	}
-
-	// Find section end.
-	endIdx := len(lines)
-	for i := startIdx + 1; i < len(lines); i++ {
-		trimmed := strings.TrimSpace(lines[i])
-		if strings.HasPrefix(trimmed, "[") && !strings.HasPrefix(trimmed, "[[") {
-			endIdx = i
-			break
-		}
-	}
-
-	if orig == sentinel {
-		// Section was absent — remove the entire block.
-		// Also remove a preceding blank line if present.
-		removeStart := startIdx
-		if removeStart > 0 && strings.TrimSpace(lines[removeStart-1]) == "" {
-			removeStart--
-		}
-		return splice(removeStart, endIdx, nil)
-	}
-
-	// Restore original block.
-	return splice(startIdx, endIdx, strings.Split(orig, "\n"))
-}
-
-// UpdateProxyURL updates only the base_url in the provider section.
-// Used for multi-session handoff when an owner session ends and a survivor
-// rebinds the port: the proxy URL changes, but everything else stays.
-func (m *Manager) UpdateProxyURL(newURL string) error {
-	data, err := os.ReadFile(m.configPath)
-	if err != nil {
-		return fmt.Errorf("read config.toml: %w", err)
-	}
-	content := string(data)
-
-	lines := strings.Split(content, "\n")
-	inSection := false
-	for i, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if trimmed == "[model_providers.databricks-proxy]" {
-			inSection = true
-			continue
-		}
-		if inSection {
-			if strings.HasPrefix(trimmed, "[") {
-				break
-			}
-			if strings.HasPrefix(trimmed, "base_url") {
-				lines[i] = fmt.Sprintf("base_url = %q", newURL)
-				break
-			}
-		}
-	}
-
-	return atomicWrite(m.configPath, []byte(strings.Join(lines, "\n")))
-}
-
-// RestoreFromBackup restores config.toml + sibling file from their backup
-// files if backups exist. Returns true if any restore was performed. Used
-// for crash recovery on next startup when a prior session left backups
-// behind without running Restore().
-func (m *Manager) RestoreFromBackup() bool {
-	restored := false
-
-	if data, err := os.ReadFile(m.backupPath); err == nil {
-		if err := atomicWrite(m.configPath, data); err == nil {
-			os.Remove(m.backupPath)
-			restored = true
-		}
-	}
-
-	if data, err := os.ReadFile(m.siblingBak); err == nil {
-		if err := atomicWrite(m.siblingPath, data); err == nil {
-			os.Remove(m.siblingBak)
-			restored = true
-		}
-	} else if os.IsNotExist(err) {
-		// No backup → sibling file is ours from this aborted session;
-		// remove it if present so it doesn't linger.
-		if _, statErr := os.Stat(m.siblingPath); statErr == nil {
-			if rerr := os.Remove(m.siblingPath); rerr == nil {
-				restored = true
-			}
-		}
-	}
-
-	return restored
-}
-
-// --- Helpers ---
-
 // isRootKey checks if a trimmed line is a root-level assignment for the given key.
 func isRootKey(trimmed, key string) bool {
 	return strings.HasPrefix(trimmed, key+" ") || strings.HasPrefix(trimmed, key+"=")
 }
 
-// inAnySection returns true if line at idx is inside a [section] (i.e., there's
-// a section header somewhere above it with no intervening root-level context).
+// inAnySection returns true if line at idx is inside a [section].
 func inAnySection(lines []string, idx int) bool {
 	for i := idx - 1; i >= 0; i-- {
 		trimmed := strings.TrimSpace(lines[i])
@@ -892,16 +544,6 @@ func inAnySection(lines []string, idx int) bool {
 		}
 	}
 	return false
-}
-
-// allSentinels returns true if all values in the map are sentinel.
-func allSentinels(m map[string]string) bool {
-	for _, v := range m {
-		if v != sentinel {
-			return false
-		}
-	}
-	return true
 }
 
 // insertAt inserts a string at the given index in a slice.
@@ -936,7 +578,6 @@ func atomicWrite(path string, data []byte) error {
 		os.Remove(tmpPath)
 		return err
 	}
-
 	if _, err := tmp.Write(data); err != nil {
 		tmp.Close()
 		os.Remove(tmpPath)

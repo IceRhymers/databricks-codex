@@ -43,7 +43,7 @@ Transparent wrapper for the OpenAI Codex CLI that auto-injects Databricks OAuth 
 - Shim files (`lock.go`, `registry.go`, `process.go`, `proxy.go`) re-export or thin-wrap types from databricks-claude; keep them minimal
 - The resolution chain pattern (flag → env → saved state → default) is used for `profile`, `model`, and `otel-logs-table` — follow it precisely when adding new persistent flags
 - `modelSet bool` / `otelLogsTableSet bool` patterns distinguish explicit flags from defaults; new persistent flags need an analogous `*Set` variable
-- Never defer `cm.Restore()` — `os.Exit()` skips deferred calls; always call it explicitly before exit
+- **Write-once config model**: `tomlconfig.Patch` writes config.toml + sibling and returns. There is no Backup/Restore round-trip; do not add one back. Restore-on-exit was unreliable (os.Exit skips defers, panics/SIGKILL leave stale state, multi-session handoff races) and the same pattern in databricks-claude is also write-once.
 
 ### Testing Requirements
 - `make test` runs `go test ./... -v`
