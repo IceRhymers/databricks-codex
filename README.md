@@ -242,6 +242,23 @@ databricks-codex serve --idle-timeout 0
 
 The SessionStart hook installed by `databricks-codex hooks install` spawns `databricks-codex serve` under the hood — you don't need to invoke this manually for the hooks path.
 
+### Using your own codex client against `serve`
+
+When you launch `codex` (TUI, GUI, or IDE extension) yourself against a `serve`-mode proxy — instead of going through the `databricks-codex` transparent wrapper — **you must tell codex to use the `databricks-proxy` profile** so it picks up the sibling config layer (`~/.codex/databricks-proxy.config.toml`) that points at the local proxy:
+
+```bash
+# TUI / one-shot exec
+codex --profile databricks-proxy "explain this codebase"
+codex exec --profile databricks-proxy "fix the bug in main.go"
+
+# Persist as the default profile so you don't have to type it every time
+codex config set profile databricks-proxy
+```
+
+For the **Codex GUI / IDE extension**, set the active profile to `databricks-proxy` in its settings — the wrapper `databricks-codex` (transparent mode) handles this for you automatically by prepending `--profile databricks-proxy`, but standalone `codex` invocations against a `serve`-mode proxy don't.
+
+> **Why:** Codex's profile-v2 layout (released 2026) requires the proxy config to live in a sibling file (`<profile>.config.toml`) selected by `--profile`, rather than as a root `profile = "..."` key in base `config.toml`. The transparent wrapper injects this flag; `serve` mode cannot, because it doesn't launch codex.
+
 ## `hooks` Subcommand
 
 Install hooks so every Codex session auto-starts the proxy on startup — no manual `databricks-codex serve` needed. Replaces the legacy root flags (`--install-hooks` / `--uninstall-hooks` / `--headless-ensure`), which were removed in v0.12.
@@ -281,6 +298,7 @@ Removes only the databricks-codex hook entries. Other hooks in your `hooks.json`
 - Safe to rerun `hooks install` after upgrades — existing hooks are replaced, not duplicated.
 - Custom port settings persist automatically via the state file (`~/.codex/.databricks-codex.json`).
 - `hooks session-start` is wired by `hooks install` for you; running it manually is a no-op when the proxy is already up.
+- **Codex profile selection:** the SessionStart hook only spawns the proxy — your codex client (TUI/GUI/extension) still needs to use the `databricks-proxy` profile to route through it. See [Using your own codex client against `serve`](#using-your-own-codex-client-against-serve) above. The simplest setup is `codex config set profile databricks-proxy` once, then plain `codex` always uses the proxy.
 
 ## Shell Tab Completions
 
