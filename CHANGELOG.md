@@ -1,5 +1,20 @@
 # Changelog
 
+## [2.0.0](https://github.com/IceRhymers/databricks-codex/compare/v1.0.0...v2.0.0) (2026-06-02)
+
+
+### ⚠ BREAKING CHANGES
+
+* write-once config model — remove Backup/Restore round-trip
+* write root-level model_provider override for GUI/raw codex paths
+* migrate to Codex profile-v2 config layout
+
+### Bug Fixes
+
+* migrate to Codex profile-v2 config layout ([c46ab2c](https://github.com/IceRhymers/databricks-codex/commit/c46ab2ccac5ed52aaa41dc892e5a060f025fec41))
+* write root-level model_provider override for GUI/raw codex paths ([36199b1](https://github.com/IceRhymers/databricks-codex/commit/36199b1b00fe78c975c2bca3f75c381e91101a0d))
+* write-once config model — remove Backup/Restore round-trip ([b005b9c](https://github.com/IceRhymers/databricks-codex/commit/b005b9c88e45adc4b1a799a6dd34193aadc78801))
+
 ## [1.0.0](https://github.com/IceRhymers/databricks-codex/compare/v0.11.0...v1.0.0) (2026-05-23)
 
 
